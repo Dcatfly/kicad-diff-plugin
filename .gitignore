@@ -1,0 +1,11 @@
+# Build outputs
+/dist
+/plugin/web
+
+# Python caches
+/plugin/__pycache__
+/plugin/*.pyc
+/plugin/.server.log
+
+# Local package manager cache
+/.pnpm-store

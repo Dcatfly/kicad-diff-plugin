@@ -1,0 +1,29 @@
+{
+  "$schema": "https://go.kicad.org/api/schemas/v1",
+  "identifier": "org.dcatfly.kicad-diff-plugin",
+  "name": "KiCad Diff Plugin",
+  "description": "Open a web dashboard powered by a local Python server and KiCad IPC.",
+  "runtime": {
+    "type": "python"
+  },
+  "actions": [
+    {
+      "identifier": "open-dashboard",
+      "name": "Open Diff Dashboard",
+      "description": "Start the Python server and open the dashboard in browser.",
+      "show-button": true,
+      "scopes": [
+        "pcb"
+      ],
+      "entrypoint": "entry.py",
+      "icons-light": [
+        "icons/button-light-24.png",
+        "icons/button-light-48.png"
+      ],
+      "icons-dark": [
+        "icons/button-dark-24.png",
+        "icons/button-dark-48.png"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,42 @@
+@import url('https://fonts.googleapis.com/css2?family=Chivo:wght@500;700&family=IBM+Plex+Mono:wght@400;600&display=swap');
+@import 'tailwindcss';
+
+:root {
+  --paper: #ede8dc;
+  --ink-strong: #1e2936;
+  --warn: #c2410c;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-width: 320px;
+  font-family: 'IBM Plex Mono', monospace;
+  color: var(--ink-strong);
+  background-color: #dad4c4;
+  background-image:
+    radial-gradient(circle at 5% 10%, rgba(250, 245, 235, 0.75), transparent 40%),
+    radial-gradient(
+      circle at 86% 14%,
+      rgba(177, 203, 235, 0.4),
+      transparent 44%
+    ),
+    radial-gradient(circle at 30% 85%, rgba(255, 241, 211, 0.5), transparent 36%);
+  background-attachment: fixed;
+}
+
+#root {
+  min-height: 100vh;
+}
+
+.font-display {
+  font-family: 'Chivo', sans-serif;
+}
+
+::selection {
+  color: white;
+  background: #243447;
+}
