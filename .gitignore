@@ -5,7 +5,8 @@
 # Python caches
 /plugin/__pycache__
 /plugin/*.pyc
-/plugin/.server.log
+/plugin/.server*.log
+/plugin/.server*.pid
 
 # Local package manager cache
 /.pnpm-store

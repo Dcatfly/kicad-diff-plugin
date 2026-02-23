@@ -1,11 +1,18 @@
 #!/usr/bin/env python3
+"""KiCad Diff Plugin - HTTP server with diff API routes.
+
+Serves the built frontend (SPA) and provides Git version / SVG export APIs.
+"""
 from __future__ import annotations
 
 import argparse
 import json
 import mimetypes
 import os
+import shutil
+import tempfile
 import threading
+import time
 from datetime import datetime, timezone
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -13,345 +20,38 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
-try:
-    import kipy
-    from kipy.board import Board
-    from kipy.proto.common.types import DocumentType
-    from kipy.util.board_layer import layer_from_canonical_name
-except Exception:
-    kipy = None
-    Board = None
-    DocumentType = None
-    layer_from_canonical_name = None
+from diff_engine import (
+    export_for_ref,
+    find_kicad_cli,
+    find_repo_root,
+    get_versions,
+    resolve_ref,
+)
 
 PLUGIN_DIR = Path(__file__).resolve().parent
 WEB_DIR = PLUGIN_DIR / "web"
-IPC_CLIENT_NAME = "org.dcatfly.kicad-diff-plugin.server"
-NM_PER_MM = 1_000_000.0
 
 
 def utc_now_iso() -> str:
     return datetime.now(tz=timezone.utc).isoformat()
 
 
-def build_error(message: str, connected: bool = False, has_board: bool = False) -> dict[str, Any]:
-    return {
-        "connected": connected,
-        "hasBoard": has_board,
-        "message": message,
-        "updatedAt": utc_now_iso(),
-    }
-
-
-def to_optional_count(value: Any) -> int | None:
-    if value is None:
-        return None
-    try:
-        return len(value)
-    except TypeError:
-        return None
-
-
-def resolve_board_path(board_file: str | None, project_path: str | None) -> str | None:
-    if not board_file:
-        return None
-    if Path(board_file).is_absolute() or not project_path:
-        return board_file
-    return str(Path(project_path) / board_file)
-
-
-def list_open_board_docs(kicad: Any) -> tuple[list[Any], list[str]]:
-    if DocumentType is None:
-        return [], []
-
-    try:
-        docs = list(kicad.get_open_documents(DocumentType.DOCTYPE_PCB))
-    except Exception:
-        return [], []
-
-    labels: list[str] = []
-    for doc in docs:
-        board_file = str(getattr(doc, "board_filename", "")) or None
-        project = getattr(doc, "project", None)
-        project_path = str(getattr(project, "path", "")) or None
-        labels.append(resolve_board_path(board_file, project_path) or "<unknown>")
-
-    return docs, labels
-
-
-def select_board(kicad: Any) -> tuple[Any, list[str]]:
-    docs, labels = list_open_board_docs(kicad)
-    if not docs or Board is None:
-        return kicad.get_board(), labels
-
-    for doc in docs:
-        board = Board(kicad._client, doc)
-        try:
-            # A cheap probe to check whether this doc can be queried.
-            board.get_footprints()
-            return board, labels
-        except Exception as error:
-            if "is not open" in str(error):
-                continue
-            return board, labels
-
-    return Board(kicad._client, docs[0]), labels
-
-
-def read_metric(kicad: Any, board: Any, name: str, reader: Any) -> tuple[Any | None, str | None]:
-    try:
-        return reader(board), None
-    except Exception as first_error:
-        if "is not open" in str(first_error):
-            try:
-                retry_board, _ = select_board(kicad)
-                return reader(retry_board), None
-            except Exception as retry_error:
-                return None, f"{name}: {retry_error}"
-        return None, f"{name}: {first_error}"
-
-
-def board_size_mm(board: Any) -> tuple[dict[str, float] | None, str]:
-    try:
-        shapes = list(board.get_shapes() or [])
-    except Exception:
-        return None, "Unavailable"
-    source = "All Shapes"
-
-    if layer_from_canonical_name is not None:
-        try:
-            edge_layer = layer_from_canonical_name("Edge.Cuts")
-            edge_shapes = [
-                shape for shape in shapes if getattr(shape, "layer", None) == edge_layer
-            ]
-            if edge_shapes:
-                shapes = edge_shapes
-                source = "Edge.Cuts"
-        except Exception:
-            pass
-
-    if not shapes:
-        return None, source
-
-    min_x: int | None = None
-    min_y: int | None = None
-    max_x: int | None = None
-    max_y: int | None = None
-
-    for item in shapes:
-        try:
-            box = board.get_item_bounding_box(item, include_text=False)
-        except TypeError:
-            try:
-                box = board.get_item_bounding_box(item)
-            except Exception:
-                continue
-        except Exception:
-            continue
-
-        if box is None:
-            continue
-
-        try:
-            x0 = int(box.pos.x)
-            y0 = int(box.pos.y)
-            width = int(box.size.x)
-            height = int(box.size.y)
-        except Exception:
-            continue
-
-        if width <= 0 or height <= 0:
-            continue
-
-        x1 = x0 + width
-        y1 = y0 + height
-
-        min_x = x0 if min_x is None else min(min_x, x0)
-        min_y = y0 if min_y is None else min(min_y, y0)
-        max_x = x1 if max_x is None else max(max_x, x1)
-        max_y = y1 if max_y is None else max(max_y, y1)
-
-    if min_x is None or min_y is None or max_x is None or max_y is None:
-        return None, source
-
-    return (
-        {
-            "width": round((max_x - min_x) / NM_PER_MM, 3),
-            "height": round((max_y - min_y) / NM_PER_MM, 3),
-        },
-        source,
-    )
-
-
-def collect_project_info() -> dict[str, Any]:
-    if kipy is None:
-        return build_error("kicad-python 未安装，无法连接 KiCad IPC")
-
-    socket_path = os.environ.get("KICAD_API_SOCKET")
-    token = os.environ.get("KICAD_API_TOKEN")
-
-    if not socket_path:
-        return build_error("缺少 KICAD_API_SOCKET 环境变量")
-
-    if not token:
-        return build_error("缺少 KICAD_API_TOKEN 环境变量")
-
-    try:
-        kicad = kipy.KiCad(
-            socket_path=socket_path,
-            kicad_token=token,
-            client_name=IPC_CLIENT_NAME,
-        )
-    except Exception as error:
-        return build_error(f"KiCad IPC 连接失败: {error}")
-
-    try:
-        board, open_board_docs = select_board(kicad)
-    except Exception as error:
-        return build_error(f"读取当前板失败: {error}", connected=True)
-
-    if board is None:
-        return build_error("当前没有打开 PCB 文档", connected=True)
-
-    project_name: str | None = None
-    project_path: str | None = None
-
-    try:
-        project = board.get_project()
-        project_name = str(getattr(project, "name", "")) or None
-        project_path = str(getattr(project, "path", "")) or None
-    except Exception:
-        project = None
-
-    board_file = str(getattr(board, "name", "")) or None
-    board_path = resolve_board_path(board_file, project_path)
-
-    warnings: list[str] = []
-
-    copper_layers_raw, error = read_metric(
-        kicad,
-        board,
-        "copper_layers",
-        lambda item: int(item.get_copper_layer_count()),
-    )
-    copper_layers = copper_layers_raw if isinstance(copper_layers_raw, int) else None
-    if error:
-        warnings.append(error)
-
-    nets_raw, error = read_metric(
-        kicad,
-        board,
-        "nets",
-        lambda item: to_optional_count(item.get_nets()),
-    )
-    nets = nets_raw if isinstance(nets_raw, int) else None
-    if error:
-        warnings.append(error)
-
-    footprints_raw, error = read_metric(
-        kicad,
-        board,
-        "footprints",
-        lambda item: to_optional_count(item.get_footprints()),
-    )
-    footprints = footprints_raw if isinstance(footprints_raw, int) else None
-    if error:
-        warnings.append(error)
-
-    tracks_raw, error = read_metric(
-        kicad,
-        board,
-        "tracks",
-        lambda item: to_optional_count(item.get_tracks()),
-    )
-    tracks = tracks_raw if isinstance(tracks_raw, int) else None
-    if error:
-        warnings.append(error)
-
-    zones_raw, error = read_metric(
-        kicad,
-        board,
-        "zones",
-        lambda item: to_optional_count(item.get_zones()),
-    )
-    zones = zones_raw if isinstance(zones_raw, int) else None
-    if error:
-        warnings.append(error)
-
-    board_size_raw, error = read_metric(
-        kicad,
-        board,
-        "board_size",
-        board_size_mm,
-    )
-    if isinstance(board_size_raw, tuple) and len(board_size_raw) == 2:
-        size_mm, size_source = board_size_raw
-    else:
-        size_mm, size_source = None, "Unavailable"
-    if error:
-        warnings.append(error)
-
-    all_metrics_missing = (
-        copper_layers is None
-        and nets is None
-        and footprints is None
-        and tracks is None
-        and zones is None
-        and size_mm is None
-    )
-    if all_metrics_missing:
-        message = (
-            "当前 PCB 未在该服务连接的 KiCad 会话中打开。"
-            "请回到目标 PCB 编辑器后再次点击插件按钮重连。"
-        )
-        details: list[str] = []
-        if warnings:
-            details.append(warnings[0])
-        if open_board_docs:
-            details.append(f"open_docs={', '.join(open_board_docs[:2])}")
-        if details:
-            message = f"{message} ({'; '.join(details)})"
-        return build_error(message, connected=True, has_board=False)
-
-    message = None
-    if warnings:
-        message = f"部分信息读取失败: {warnings[0]}"
-
-    return {
-        "connected": True,
-        "hasBoard": True,
-        "message": message,
-        "projectName": project_name,
-        "projectPath": project_path,
-        "boardFile": board_file,
-        "boardPath": board_path,
-        "copperLayers": copper_layers,
-        "nets": nets,
-        "footprints": footprints,
-        "tracks": tracks,
-        "zones": zones,
-        "boardSizeMm": size_mm,
-        "boardSizeSource": size_source,
-        "updatedAt": utc_now_iso(),
-    }
-
-
 def placeholder_html() -> bytes:
     html = """<!doctype html>
-<html lang=\"zh-CN\">
+<html lang="zh-CN">
   <head>
-    <meta charset=\"utf-8\" />
-    <meta name=\"viewport\" content=\"width=device-width,initial-scale=1\" />
-    <title>KiCad Diff Plugin</title>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>KiCad Diff</title>
     <style>
-      body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; margin: 0; padding: 32px; }
-      code { background: #f3f4f6; padding: 2px 6px; border-radius: 6px; }
-      pre { background: #111827; color: #f9fafb; padding: 16px; border-radius: 10px; overflow-x: auto; }
+      body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+             margin: 0; padding: 32px; background: #0f0f23; color: #e2e8f0; }
+      pre { background: #1a1b3a; color: #e2e8f0; padding: 16px; border-radius: 10px; }
     </style>
   </head>
   <body>
-    <h1>前端资源尚未构建</h1>
-    <p>请在仓库根目录运行以下命令后刷新页面：</p>
+    <h1>Frontend not built yet</h1>
+    <p>Run the following command and refresh:</p>
     <pre>pnpm -C frontend run build</pre>
   </body>
 </html>
@@ -359,43 +59,128 @@ def placeholder_html() -> bytes:
     return html.encode("utf-8")
 
 
-class RequestHandler(BaseHTTPRequestHandler):
-    server_version = "KiCadDiffPlugin/0.1"
+class DiffRequestHandler(BaseHTTPRequestHandler):
+    """HTTP handler for the diff viewer backend."""
+
+    server_version = "KiCadDiff/0.2"
+
+    # These are set by the factory below
+    _repo_root: Path
+    _output_dir: str
+    _kicad_cli: str
+    _export_locks: dict[str, threading.Lock]
+    _export_locks_guard: threading.Lock
 
     def do_GET(self) -> None:
         parsed = urlparse(self.path)
+        path = parsed.path
 
-        if parsed.path == "/api/health":
-            self.send_json({"ok": True, "updatedAt": utc_now_iso()})
-            return
-
-        if parsed.path == "/api/project/info":
-            self.send_json(collect_project_info())
-            return
-
-        self.serve_static(parsed.path)
+        if path == "/api/health":
+            self._send_json({
+                "ok": True,
+                "updatedAt": utc_now_iso(),
+                "boardDir": str(self._repo_root),
+            })
+        elif path == "/api/versions":
+            self._handle_versions()
+        elif path.startswith("/output/"):
+            self._serve_output_file(path)
+        else:
+            self._serve_static(path)
 
     def do_POST(self) -> None:
         parsed = urlparse(self.path)
-        if parsed.path == "/api/shutdown":
-            self.send_json({"ok": True, "updatedAt": utc_now_iso()})
+        if parsed.path == "/api/export":
+            self._handle_export()
+        elif parsed.path == "/api/shutdown":
+            self._send_json({"ok": True, "updatedAt": utc_now_iso()})
             threading.Thread(target=self.server.shutdown, daemon=True).start()
-            return
-        self.send_error(HTTPStatus.NOT_FOUND)
+        else:
+            self.send_error(HTTPStatus.NOT_FOUND)
 
     def log_message(self, format: str, *args: Any) -> None:
-        print(f"[http] {self.address_string()} - {format % args}")
+        print(f"[kicad-diff] {format % args}")
 
-    def send_json(self, payload: dict[str, Any], status: int = HTTPStatus.OK) -> None:
-        body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
-        self.send_response(status)
-        self.send_header("Content-Type", "application/json; charset=utf-8")
-        self.send_header("Cache-Control", "no-store")
-        self.send_header("Content-Length", str(len(body)))
+    # ── API handlers ──
+
+    def _handle_versions(self) -> None:
+        try:
+            versions = get_versions(self._repo_root)
+            self._send_json(versions)
+        except Exception as e:
+            print(f"[kicad-diff] Error in /api/versions: {e}")
+            self._send_json({"status": "error", "message": str(e)}, 500)
+
+    def _handle_export(self) -> None:
+        content_length = int(self.headers.get("Content-Length", 0))
+        body = self.rfile.read(content_length)
+        try:
+            data = json.loads(body)
+        except json.JSONDecodeError:
+            self._send_json({"status": "error", "message": "Invalid JSON"}, 400)
+            return
+
+        ref = data.get("ref", "").strip()
+        if not ref:
+            self._send_json({"status": "error", "message": "Missing ref"}, 400)
+            return
+
+        try:
+            actual_ref = resolve_ref(ref, self._repo_root)
+        except ValueError as e:
+            self._send_json({"status": "error", "message": str(e)}, 400)
+            return
+        except Exception:
+            self._send_json({"status": "error", "message": f"Unknown ref: {ref}"}, 400)
+            return
+
+        try:
+            # Per-ref lock: different refs export in parallel,
+            # same ref (especially "working") is serialized.
+            with self._export_locks_guard:
+                ref_lock = self._export_locks.get(actual_ref)
+                if ref_lock is None:
+                    ref_lock = threading.Lock()
+                    self._export_locks[actual_ref] = ref_lock
+
+            with ref_lock:
+                files, cached = export_for_ref(
+                    actual_ref, self._repo_root, self._output_dir, self._kicad_cli,
+                )
+            self._send_json({
+                "status": "ok",
+                "ref": actual_ref,
+                "cached": cached,
+                "files": files,
+            })
+        except Exception as e:
+            print(f"[kicad-diff] Error in /api/export for ref={ref}: {e}")
+            self._send_json({"status": "error", "message": str(e)}, 500)
+
+    # ── File serving ──
+
+    def _serve_output_file(self, path: str) -> None:
+        rel = path[len("/output/"):]
+        filepath = Path(self._output_dir) / rel
+        if not filepath.exists() or not filepath.is_file():
+            self.send_error(HTTPStatus.NOT_FOUND)
+            return
+        try:
+            filepath.resolve().relative_to(Path(self._output_dir).resolve())
+        except ValueError:
+            self.send_error(HTTPStatus.FORBIDDEN)
+            return
+        data = filepath.read_bytes()
+        self.send_response(HTTPStatus.OK)
+        if filepath.suffix == ".svg":
+            self.send_header("Content-Type", "image/svg+xml")
+        else:
+            self.send_header("Content-Type", "application/octet-stream")
+        self.send_header("Content-Length", str(len(data)))
         self.end_headers()
-        self.wfile.write(body)
+        self.wfile.write(data)
 
-    def serve_static(self, raw_path: str) -> None:
+    def _serve_static(self, raw_path: str) -> None:
         index_path = WEB_DIR / "index.html"
         web_dir = WEB_DIR.resolve()
 
@@ -445,30 +230,127 @@ class RequestHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    # ── Helpers ──
+
+    def _send_json(self, data: Any, status: int = HTTPStatus.OK) -> None:
+        body = json.dumps(data, ensure_ascii=False).encode("utf-8")
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "no-cache")
+        self.end_headers()
+        self.wfile.write(body)
+
+
+def _make_handler_class(
+    repo_root: Path,
+    output_dir: str,
+    kicad_cli: str,
+) -> type[DiffRequestHandler]:
+    """Create a handler class with bound configuration."""
+    return type(
+        "BoundDiffHandler",
+        (DiffRequestHandler,),
+        {
+            "_repo_root": repo_root,
+            "_output_dir": output_dir,
+            "_kicad_cli": kicad_cli,
+            "_export_locks": {},
+            "_export_locks_guard": threading.Lock(),
+        },
+    )
+
+
+def _is_process_alive(pid: int) -> bool:
+    """Check whether a process with the given PID is still running."""
+    try:
+        os.kill(pid, 0)  # signal 0 = existence check, no signal sent
+        return True
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        # Process exists but we lack permission to signal it
+        return True
+    except OSError:
+        return False
+
+
+def _start_pid_watcher(
+    watch_pid: int,
+    server: ThreadingHTTPServer,
+    poll_interval: float = 3.0,
+) -> None:
+    """Start a daemon thread that shuts down the server when watch_pid exits."""
+
+    def _watcher() -> None:
+        while True:
+            time.sleep(poll_interval)
+            if not _is_process_alive(watch_pid):
+                print(
+                    f"[kicad-diff] Watched process {watch_pid} exited, "
+                    "shutting down server"
+                )
+                server.shutdown()
+                return
+
+    t = threading.Thread(target=_watcher, daemon=True)
+    t.start()
+    print(f"[kicad-diff] PID watcher started for PID {watch_pid}")
+
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="KiCad diff plugin web server")
+    parser = argparse.ArgumentParser(description="KiCad Diff web server")
     parser.add_argument("--host", default="127.0.0.1", help="bind host")
     parser.add_argument("--port", default=18765, type=int, help="bind port")
     parser.add_argument("--pid-file", default="", help="optional pid file path")
+    parser.add_argument(
+        "--board-dir",
+        default=os.environ.get("KICAD_DIFF_BOARD_DIR", ""),
+        help="KiCad project directory (default: $KICAD_DIFF_BOARD_DIR or cwd)",
+    )
+    parser.add_argument(
+        "--watch-pid",
+        default=0,
+        type=int,
+        help="PID to watch; server shuts down when this process exits",
+    )
     return parser.parse_args()
 
 
 def main() -> int:
     args = parse_args()
     pid_file = Path(args.pid_file).resolve() if args.pid_file else None
+    board_dir = args.board_dir or os.getcwd()
 
-    server = ThreadingHTTPServer((args.host, args.port), RequestHandler)
+    repo_root = find_repo_root(board_dir)
+    kicad_cli = find_kicad_cli()
+    output_dir = tempfile.mkdtemp(prefix="kicad-diff-")
+
+    print(f"[kicad-diff] Plugin dir: {PLUGIN_DIR}")
+    print(f"[kicad-diff] Repo root:  {repo_root}")
+    print(f"[kicad-diff] kicad-cli:  {kicad_cli}")
+    print(f"[kicad-diff] Output dir: {output_dir}")
+    print(f"[kicad-diff] Board dir:  {board_dir}")
+
+    handler_class = _make_handler_class(repo_root, output_dir, kicad_cli)
+    server = ThreadingHTTPServer((args.host, args.port), handler_class)
+
     if pid_file is not None:
         pid_file.write_text(str(os.getpid()), encoding="utf-8")
-    print(f"Server listening at http://{args.host}:{args.port}")
+
+    # Start PID watcher for auto-shutdown when KiCad exits
+    if args.watch_pid > 0:
+        _start_pid_watcher(args.watch_pid, server)
+
+    print(f"[kicad-diff] Server listening at http://{args.host}:{args.port}")
 
     try:
         server.serve_forever()
     except KeyboardInterrupt:
-        pass
+        print("\n[kicad-diff] Server stopped.")
     finally:
         server.server_close()
+        shutil.rmtree(output_dir, ignore_errors=True)
         if pid_file is not None:
             pid_file.unlink(missing_ok=True)
 

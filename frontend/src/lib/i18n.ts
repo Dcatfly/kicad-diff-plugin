@@ -1,0 +1,88 @@
+// ─── i18n: translation dictionary + useTranslation hook ───
+
+import { useDiffStore } from '../stores/useDiffStore'
+import type { Locale } from '../types'
+
+const TRANSLATIONS: Record<Locale, Record<string, string>> = {
+  zh: {
+    oldVersion: '旧版:',
+    newVersion: '新版:',
+    compare: '对比',
+    modeDiff: '差异高亮',
+    modeSide: '并排对比',
+    modeOverlay: '透明叠加',
+    rawOnly: '仅看原图',
+    bgFade: '背景淡化:',
+    noiseFilter: '噪点过滤:',
+    newOpacity: '新版透明度:',
+    zoom: '缩放:',
+    legendOldOnly: '仅旧版 (已删除)',
+    legendNewOnly: '仅新版 (已新增)',
+    legendModified: '两版不同 (已修改)',
+    legendHint: '滚轮缩放 | 拖拽平移',
+    loading: '加载中...',
+    rendering: '渲染中...',
+    exporting: '正在导出 SVG，请稍候...',
+    exportFailed: '导出失败',
+    exportError: '导出出错',
+    ready: '就绪',
+    cached: '(缓存)',
+    noFiles: '无文件',
+    noKicadFiles: '两个版本中都没有找到 KiCad 文件',
+    working: '工作区',
+    workingOption: '[工作区] 未提交的当前更改',
+    currentBranch: '(当前分支)',
+    schematic: '原理图',
+    pcb: 'PCB',
+    badgeNew: '新增',
+    badgeDel: '已删除',
+    sideOld: '旧版',
+    sideNew: '新版',
+    langToggle: 'EN',
+  },
+  en: {
+    oldVersion: 'Old:',
+    newVersion: 'New:',
+    compare: 'Compare',
+    modeDiff: 'Diff Highlight',
+    modeSide: 'Side by Side',
+    modeOverlay: 'Overlay',
+    rawOnly: 'Raw View',
+    bgFade: 'BG Fade:',
+    noiseFilter: 'Noise Filter:',
+    newOpacity: 'New Opacity:',
+    zoom: 'Zoom:',
+    legendOldOnly: 'Old only (deleted)',
+    legendNewOnly: 'New only (added)',
+    legendModified: 'Different (modified)',
+    legendHint: 'Scroll to zoom | Drag to pan',
+    loading: 'Loading...',
+    rendering: 'Rendering...',
+    exporting: 'Exporting SVG, please wait...',
+    exportFailed: 'Export failed',
+    exportError: 'Export error',
+    ready: 'Ready',
+    cached: '(cached)',
+    noFiles: 'No files',
+    noKicadFiles: 'No KiCad files found in either version',
+    working: 'Working',
+    workingOption: '[Working] Uncommitted changes',
+    currentBranch: '(current)',
+    schematic: 'Schematic',
+    pcb: 'PCB',
+    badgeNew: 'New',
+    badgeDel: 'Deleted',
+    sideOld: 'Old',
+    sideNew: 'New',
+    langToggle: '中文',
+  },
+}
+
+export function translate(locale: Locale, key: string): string {
+  return TRANSLATIONS[locale]?.[key] ?? key
+}
+
+export function useTranslation() {
+  const locale = useDiffStore((s) => s.locale)
+  return (key: string) => translate(locale, key)
+}

@@ -1,0 +1,83 @@
+import { useDiffStore } from '../stores/useDiffStore'
+import { useTranslation } from '../lib/i18n'
+import Slider from './Slider'
+import type { ViewMode } from '../types'
+
+export default function Toolbar() {
+  const viewMode = useDiffStore((s) => s.viewMode)
+  const rawMode = useDiffStore((s) => s.rawMode)
+  const fade = useDiffStore((s) => s.fade)
+  const thresh = useDiffStore((s) => s.thresh)
+  const overlay = useDiffStore((s) => s.overlay)
+  const zoom = useDiffStore((s) => s.zoom)
+  const setViewMode = useDiffStore((s) => s.setViewMode)
+  const setRawMode = useDiffStore((s) => s.setRawMode)
+  const setFade = useDiffStore((s) => s.setFade)
+  const setThresh = useDiffStore((s) => s.setThresh)
+  const setOverlay = useDiffStore((s) => s.setOverlay)
+  const setZoom = useDiffStore((s) => s.setZoom)
+  const t = useTranslation()
+
+  const isSide = viewMode === 'side'
+  const isOverlay = viewMode === 'overlay'
+  const showFadeThresh = !isOverlay && !(isSide && rawMode)
+  const showOverlay = isOverlay
+
+  const modes: { mode: ViewMode; label: string }[] = [
+    { mode: 'diff', label: t('modeDiff') },
+    { mode: 'side', label: t('modeSide') },
+    { mode: 'overlay', label: t('modeOverlay') },
+  ]
+
+  return (
+    <div className="flex items-center gap-3 px-4 py-1.5 bg-bg-panel border-b border-border text-xs flex-wrap">
+      {/* Mode buttons */}
+      <div className="flex items-center gap-1">
+        {modes.map(({ mode, label }) => (
+          <button
+            key={mode}
+            onClick={() => setViewMode(mode)}
+            className={`px-2.5 py-1 rounded text-xs transition-colors ${
+              viewMode === mode
+                ? 'bg-accent text-white'
+                : 'bg-bg-deep text-text-secondary hover:text-text-primary border border-border'
+            }`}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+
+      {/* Raw toggle (side mode only) */}
+      {isSide && (
+        <button
+          onClick={() => setRawMode(!rawMode)}
+          className={`px-2.5 py-1 rounded text-xs transition-colors ${
+            rawMode
+              ? 'bg-accent text-white'
+              : 'bg-bg-deep text-text-secondary hover:text-text-primary border border-border'
+          }`}
+        >
+          {t('rawOnly')}
+        </button>
+      )}
+
+      {/* Separating divider */}
+      <div className="w-px h-5 bg-border" />
+
+      {/* Sliders */}
+      {showFadeThresh && (
+        <>
+          <Slider label={t('bgFade')} value={fade} min={0} max={100} suffix="%" onChange={setFade} />
+          <Slider label={t('noiseFilter')} value={thresh} min={1} max={80} onChange={setThresh} />
+        </>
+      )}
+
+      {showOverlay && (
+        <Slider label={t('newOpacity')} value={overlay} min={0} max={100} suffix="%" onChange={setOverlay} />
+      )}
+
+      <Slider label={t('zoom')} value={zoom} min={10} max={800} suffix="%" onChange={setZoom} />
+    </div>
+  )
+}
