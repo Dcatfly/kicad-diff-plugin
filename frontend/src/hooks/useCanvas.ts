@@ -9,6 +9,7 @@ import {
   renderDiff,
   renderOverlay,
   renderSide,
+  renderSideRaw,
   applyZoom,
   renderDiffViewport,
   renderSideAnnotatedViewport,
@@ -75,11 +76,6 @@ export function useCanvas(
       if (!dims || !images) return
 
       const state = useDiffStore.getState()
-      // Only needed for modes that do pixel-level operations
-      const needsPixelOps =
-        state.viewMode === 'diff' ||
-        (state.viewMode === 'side' && !state.rawMode)
-      if (!needsPixelOps) return
 
       const scrollEl =
         state.viewMode === 'side'
@@ -107,6 +103,7 @@ export function useCanvas(
       const offsetY = (cy0 - srcY) * scale
       const cssW = Math.round(cw * scale)
       const cssH = Math.round(ch * scale)
+      const viewport = { srcX: cx0, srcY: cy0, srcW: cw, srcH: ch, cssW, cssH }
 
       if (state.viewMode === 'diff' && hiResRef.current) {
         hiResRef.current.style.left = (scrollEl.scrollLeft + offsetX) + 'px'
@@ -119,6 +116,17 @@ export function useCanvas(
           state.bgColor,
         )
         showHiRes(hiResRef)
+      } else if (state.viewMode === 'overlay' && hiResRef.current) {
+        hiResRef.current.style.left = (scrollEl.scrollLeft + offsetX) + 'px'
+        hiResRef.current.style.top = (scrollEl.scrollTop + offsetY) + 'px'
+        const ctx = hiResRef.current.getContext('2d')!
+        renderOverlay(
+          hiResRef.current, ctx,
+          images.imgOld, images.imgNew,
+          state.overlay, state.bgColor,
+          viewport,
+        )
+        showHiRes(hiResRef)
       } else if (state.viewMode === 'side' && hiResLRef.current && hiResRRef.current) {
         const rightScrollEl = rightPanelRef?.current
         hiResLRef.current.style.left = (scrollEl.scrollLeft + offsetX) + 'px'
@@ -127,13 +135,20 @@ export function useCanvas(
           hiResRRef.current.style.left = (rightScrollEl.scrollLeft + offsetX) + 'px'
           hiResRRef.current.style.top = (rightScrollEl.scrollTop + offsetY) + 'px'
         }
-        renderSideAnnotatedViewport(
-          hiResLRef.current, hiResRRef.current,
-          images.imgOld, images.imgNew,
-          state.fade, state.thresh,
-          cx0, cy0, cw, ch, cssW, cssH,
-          state.bgColor,
-        )
+        if (state.rawMode) {
+          const ctxL = hiResLRef.current.getContext('2d')!
+          const ctxR = hiResRRef.current.getContext('2d')!
+          renderSideRaw(hiResLRef.current, ctxL, images.imgOld, dims.natW, dims.natH, state.bgColor, viewport)
+          renderSideRaw(hiResRRef.current, ctxR, images.imgNew, dims.natW, dims.natH, state.bgColor, viewport)
+        } else {
+          renderSideAnnotatedViewport(
+            hiResLRef.current, hiResRRef.current,
+            images.imgOld, images.imgNew,
+            state.fade, state.thresh,
+            cx0, cy0, cw, ch, cssW, cssH,
+            state.bgColor,
+          )
+        }
         showHiRes(hiResLRef)
         showHiRes(hiResRRef)
       }

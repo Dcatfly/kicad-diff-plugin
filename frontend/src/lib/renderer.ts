@@ -2,6 +2,13 @@
 
 const DPR = window.devicePixelRatio || 1
 
+// ─── Types ───
+
+export interface ViewportRegion {
+  srcX: number; srcY: number; srcW: number; srcH: number
+  cssW: number; cssH: number
+}
+
 // ─── Pixel helpers ───
 
 export function getSourceWidth(src: CanvasImageSource | null): number {
@@ -237,43 +244,69 @@ export function renderOverlay(
   imgNew: CanvasImageSource,
   overlay: number,
   bgColor: string,
+  viewport?: ViewportRegion,
 ): { natW: number; natH: number } {
   const { natW, natH } = getNaturalDimensions(imgOld, imgNew)
-  const pw = Math.round(natW * DPR)
-  const ph = Math.round(natH * DPR)
+  const vp = viewport
+  const drawW = vp ? vp.cssW : natW
+  const drawH = vp ? vp.cssH : natH
+  const pw = Math.round(drawW * DPR)
+  const ph = Math.round(drawH * DPR)
   setCanvasBacking(canvas, pw, ph)
+  if (vp) {
+    canvas.style.width = drawW + 'px'
+    canvas.style.height = drawH + 'px'
+  }
   ctx.setTransform(DPR, 0, 0, DPR, 0, 0)
   ctx.imageSmoothingEnabled = true
   ctx.imageSmoothingQuality = 'high'
   ctx.fillStyle = bgColor
-  ctx.fillRect(0, 0, natW, natH)
+  ctx.fillRect(0, 0, drawW, drawH)
   ctx.globalAlpha = 1
-  ctx.drawImage(imgOld, 0, 0, natW, natH)
-  ctx.globalAlpha = overlay / 100
-  ctx.drawImage(imgNew, 0, 0, natW, natH)
+  if (vp) {
+    ctx.drawImage(imgOld, vp.srcX, vp.srcY, vp.srcW, vp.srcH, 0, 0, drawW, drawH)
+    ctx.globalAlpha = overlay / 100
+    ctx.drawImage(imgNew, vp.srcX, vp.srcY, vp.srcW, vp.srcH, 0, 0, drawW, drawH)
+  } else {
+    ctx.drawImage(imgOld, 0, 0, natW, natH)
+    ctx.globalAlpha = overlay / 100
+    ctx.drawImage(imgNew, 0, 0, natW, natH)
+  }
   ctx.globalAlpha = 1
   return { natW, natH }
 }
 
 // ─── Side-by-side mode renderers (native resolution) ───
 
-function renderSideRaw(
+export function renderSideRaw(
   cvs: HTMLCanvasElement,
   cctx: CanvasRenderingContext2D,
   img: CanvasImageSource,
   natW: number,
   natH: number,
   bgColor: string,
+  viewport?: ViewportRegion,
 ) {
-  const pw = Math.round(natW * DPR)
-  const ph = Math.round(natH * DPR)
+  const vp = viewport
+  const drawW = vp ? vp.cssW : natW
+  const drawH = vp ? vp.cssH : natH
+  const pw = Math.round(drawW * DPR)
+  const ph = Math.round(drawH * DPR)
   setCanvasBacking(cvs, pw, ph)
+  if (vp) {
+    cvs.style.width = drawW + 'px'
+    cvs.style.height = drawH + 'px'
+  }
   cctx.setTransform(DPR, 0, 0, DPR, 0, 0)
   cctx.imageSmoothingEnabled = true
   cctx.imageSmoothingQuality = 'high'
   cctx.fillStyle = bgColor
-  cctx.fillRect(0, 0, natW, natH)
-  cctx.drawImage(img, 0, 0, natW, natH)
+  cctx.fillRect(0, 0, drawW, drawH)
+  if (vp) {
+    cctx.drawImage(img, vp.srcX, vp.srcY, vp.srcW, vp.srcH, 0, 0, drawW, drawH)
+  } else {
+    cctx.drawImage(img, 0, 0, natW, natH)
+  }
 }
 
 function renderSideAnnotated(
