@@ -110,12 +110,18 @@ input[type='range']::-moz-range-thumb {
   animation: spin 0.8s linear infinite;
 }
 
-/* Side panel labels */
-.side-label {
+/* Side panel label anchor: sticky, zero-height so canvas starts at top */
+.side-label-anchor {
   position: sticky;
   top: 0;
   left: 0;
   z-index: 10;
+  height: 0;
+}
+
+/* Side panel labels: float above canvas */
+.side-label {
+  display: inline-block;
   padding: 4px 10px;
   font-size: 12px;
   font-weight: 600;

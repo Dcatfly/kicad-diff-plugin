@@ -74,6 +74,33 @@ export function usePanZoom(
     return () => container.removeEventListener('wheel', handleZoom)
   }, [containerRef, leftPanelRef, rightPanelRef, pendingScrollRef])
 
+  // Scroll sync between side panels (covers scrollbar drag, keyboard, etc.)
+  useEffect(() => {
+    const leftPanel = leftPanelRef?.current
+    const rightPanel = rightPanelRef?.current
+    if (!leftPanel || !rightPanel) return
+
+    let syncing = false
+
+    const syncFrom = (source: HTMLElement, target: HTMLElement) => {
+      if (syncing) return
+      syncing = true
+      target.scrollLeft = source.scrollLeft
+      target.scrollTop = source.scrollTop
+      syncing = false
+    }
+
+    const onLeftScroll = () => syncFrom(leftPanel, rightPanel)
+    const onRightScroll = () => syncFrom(rightPanel, leftPanel)
+
+    leftPanel.addEventListener('scroll', onLeftScroll, { passive: true })
+    rightPanel.addEventListener('scroll', onRightScroll, { passive: true })
+    return () => {
+      leftPanel.removeEventListener('scroll', onLeftScroll)
+      rightPanel.removeEventListener('scroll', onRightScroll)
+    }
+  }, [leftPanelRef, rightPanelRef])
+
   // Drag pan
   useEffect(() => {
     const container = containerRef.current

@@ -32,7 +32,9 @@ export default function SideBySideView() {
   const locale = useDiffStore((s) => s.locale)
   const t = useTranslation()
 
-  useCanvas(containerRef, undefined, canvasLRef, canvasRRef, leftPanelRef, rightPanelRef)
+  const { hiResLRef, hiResRRef } = useCanvas(
+    containerRef, undefined, canvasLRef, canvasRRef, leftPanelRef, rightPanelRef,
+  )
 
   const oldLabel = oldRef
     ? `${t('sideOld')} ${getVersionLabel(oldRef, versionMap, locale)}`
@@ -48,8 +50,13 @@ export default function SideBySideView() {
         ref={leftPanelRef}
         className="side-panel flex-1 overflow-auto bg-bg-canvas relative"
       >
-        <div className="side-label">{oldLabel}</div>
+        <div className="side-label-anchor"><div className="side-label">{oldLabel}</div></div>
         <canvas ref={canvasLRef} />
+        <canvas
+          ref={hiResLRef}
+          className="absolute pointer-events-none z-[5]"
+          style={{ display: 'none' }}
+        />
       </div>
 
       {/* Divider */}
@@ -60,8 +67,13 @@ export default function SideBySideView() {
         ref={rightPanelRef}
         className="side-panel flex-1 overflow-auto bg-bg-canvas relative"
       >
-        <div className="side-label">{newLabel}</div>
+        <div className="side-label-anchor"><div className="side-label">{newLabel}</div></div>
         <canvas ref={canvasRRef} />
+        <canvas
+          ref={hiResRRef}
+          className="absolute pointer-events-none z-[5]"
+          style={{ display: 'none' }}
+        />
       </div>
 
       <LoadingOverlay />

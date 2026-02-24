@@ -6,7 +6,7 @@ export default function DiffCanvas() {
   const containerRef = useRef<HTMLDivElement>(null)
   const canvasRef = useRef<HTMLCanvasElement>(null)
 
-  useCanvas(containerRef, canvasRef)
+  const { hiResRef } = useCanvas(containerRef, canvasRef)
 
   return (
     <div
@@ -14,6 +14,11 @@ export default function DiffCanvas() {
       className="relative flex-1 overflow-auto bg-bg-canvas"
     >
       <canvas ref={canvasRef} />
+      <canvas
+        ref={hiResRef}
+        className="absolute pointer-events-none"
+        style={{ display: 'none' }}
+      />
       <LoadingOverlay />
     </div>
   )

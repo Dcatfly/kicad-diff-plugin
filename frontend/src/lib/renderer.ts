@@ -18,26 +18,26 @@ export function getSourceHeight(src: CanvasImageSource | null): number {
   return 0
 }
 
-export function computeCanvasDimensions(
+function getNaturalDimensions(
   imgOld: CanvasImageSource,
   imgNew: CanvasImageSource,
-  zoom: number,
 ) {
   const natW = Math.max(getSourceWidth(imgOld), getSourceWidth(imgNew))
   const natH = Math.max(getSourceHeight(imgOld), getSourceHeight(imgNew))
-  const scale = zoom / 100
-  const cssW = Math.round(natW * scale)
-  const cssH = Math.round(natH * scale)
-  const pw = Math.round(cssW * DPR)
-  const ph = Math.round(cssH * DPR)
-  return { cssW, cssH, pw, ph }
+  return { natW, natH }
 }
 
-export function setCanvasSize(cvs: HTMLCanvasElement, cssW: number, cssH: number) {
-  cvs.width = Math.round(cssW * DPR)
-  cvs.height = Math.round(cssH * DPR)
-  cvs.style.width = cssW + 'px'
-  cvs.style.height = cssH + 'px'
+// Set canvas backing buffer (physical pixels) without touching CSS
+function setCanvasBacking(cvs: HTMLCanvasElement, pw: number, ph: number) {
+  cvs.width = pw
+  cvs.height = ph
+}
+
+// Set CSS display size (zoom via CSS transform, instant)
+export function applyZoom(cvs: HTMLCanvasElement, natW: number, natH: number, zoom: number) {
+  const scale = zoom / 100
+  cvs.style.width = Math.round(natW * scale) + 'px'
+  cvs.style.height = Math.round(natH * scale) + 'px'
 }
 
 function rasterize(img: CanvasImageSource, pw: number, ph: number): ImageData {
@@ -46,6 +46,18 @@ function rasterize(img: CanvasImageSource, pw: number, ph: number): ImageData {
   octx.fillStyle = '#fff'
   octx.fillRect(0, 0, pw, ph)
   octx.drawImage(img, 0, 0, pw, ph)
+  return octx.getImageData(0, 0, pw, ph)
+}
+
+function rasterizeRegion(
+  img: CanvasImageSource,
+  sx: number, sy: number, sw: number, sh: number,
+  pw: number, ph: number,
+): ImageData {
+  const oc = new OffscreenCanvas(pw, ph)
+  const octx = oc.getContext('2d')!
+  // No fill — areas outside the source image remain transparent (alpha=0)
+  octx.drawImage(img, sx, sy, sw, sh, 0, 0, pw, ph)
   return octx.getImageData(0, 0, pw, ph)
 }
 
@@ -75,50 +87,39 @@ function isPaperBlank(r: number, g: number, b: number): boolean {
   return max >= 220 && avg >= 215 && max - min <= 26
 }
 
-// ─── Diff mode renderer ───
+// ─── Shared pixel loops ───
 
-export function renderDiff(
-  canvas: HTMLCanvasElement,
-  ctx: CanvasRenderingContext2D,
-  imgOld: CanvasImageSource,
-  imgNew: CanvasImageSource,
-  zoom: number,
+function applyDiffColors(
+  oldP: Uint8ClampedArray,
+  newP: Uint8ClampedArray,
+  mask: Uint8Array,
   fade: number,
-  thresh: number,
-) {
-  const { cssW, cssH, pw, ph } = computeCanvasDimensions(imgOld, imgNew, zoom)
-  setCanvasSize(canvas, cssW, cssH)
-
-  const dOld = rasterize(imgOld, pw, ph)
-  const dNew = rasterize(imgNew, pw, ph)
-  const oldP = dOld.data
-  const newP = dNew.data
-  const mask = buildDiffMask(oldP, newP, pw * ph, thresh)
-
+  pw: number,
+  ph: number,
+): ImageData {
   const out = new ImageData(pw, ph)
   const od = out.data
   const fadeAlpha = 1 - fade / 100
-  const bgR = 15, bgG = 15, bgB = 35 // matches theme #0f0f23
+  const bgR = 15, bgG = 15, bgB = 35
 
   for (let p = 0; p < pw * ph; p++) {
     const i = p << 2
+    // Both pixels outside image bounds — keep transparent
+    if (oldP[i + 3] === 0 && newP[i + 3] === 0) { od[i + 3] = 0; continue }
     const ro = oldP[i], go = oldP[i + 1], bo = oldP[i + 2]
     const rn = newP[i], gn = newP[i + 1], bn = newP[i + 2]
     if (mask[p]) {
       const oldIsBlank = isPaperBlank(ro, go, bo)
       const newIsBlank = isPaperBlank(rn, gn, bn)
       if (oldIsBlank && !newIsBlank) {
-        // Added (green)
         od[i] = Math.round(rn * 0.3)
         od[i + 1] = Math.min(255, Math.round(gn * 0.5 + 120))
         od[i + 2] = Math.round(bn * 0.3)
       } else if (!oldIsBlank && newIsBlank) {
-        // Deleted (red)
         od[i] = Math.min(255, Math.round(ro * 0.5 + 120))
         od[i + 1] = Math.round(go * 0.3)
         od[i + 2] = Math.round(bo * 0.3)
       } else {
-        // Modified (orange)
         od[i] = Math.min(255, Math.round(rn * 0.4 + 150))
         od[i + 1] = Math.min(255, Math.round(gn * 0.3 + 100))
         od[i + 2] = Math.round(bn * 0.2)
@@ -131,66 +132,18 @@ export function renderDiff(
       od[i + 3] = 255
     }
   }
-  ctx.setTransform(1, 0, 0, 1, 0, 0)
-  ctx.putImageData(out, 0, 0)
+  return out
 }
 
-// ─── Overlay mode renderer ───
-
-export function renderOverlay(
-  canvas: HTMLCanvasElement,
-  ctx: CanvasRenderingContext2D,
-  imgOld: CanvasImageSource,
-  imgNew: CanvasImageSource,
-  zoom: number,
-  overlay: number,
-) {
-  const { cssW, cssH } = computeCanvasDimensions(imgOld, imgNew, zoom)
-  setCanvasSize(canvas, cssW, cssH)
-  ctx.setTransform(DPR, 0, 0, DPR, 0, 0)
-  ctx.imageSmoothingEnabled = true
-  ctx.imageSmoothingQuality = 'high'
-  ctx.fillStyle = '#fff'
-  ctx.fillRect(0, 0, cssW, cssH)
-  ctx.globalAlpha = 1
-  ctx.drawImage(imgOld, 0, 0, cssW, cssH)
-  ctx.globalAlpha = overlay / 100
-  ctx.drawImage(imgNew, 0, 0, cssW, cssH)
-  ctx.globalAlpha = 1
-}
-
-// ─── Side-by-side mode renderers ───
-
-export function renderSideRaw(
-  cvs: HTMLCanvasElement,
-  cctx: CanvasRenderingContext2D,
-  img: CanvasImageSource,
-  cssW: number,
-  cssH: number,
-) {
-  setCanvasSize(cvs, cssW, cssH)
-  cctx.setTransform(DPR, 0, 0, DPR, 0, 0)
-  cctx.imageSmoothingEnabled = true
-  cctx.imageSmoothingQuality = 'high'
-  cctx.fillStyle = '#fff'
-  cctx.fillRect(0, 0, cssW, cssH)
-  cctx.drawImage(img, 0, 0, cssW, cssH)
-}
-
-export function renderSideAnnotated(
-  cvs: HTMLCanvasElement,
-  cctx: CanvasRenderingContext2D,
-  oldPixels: Uint8ClampedArray,
-  newPixels: Uint8ClampedArray,
+function applySideAnnotatedColors(
+  oldP: Uint8ClampedArray,
+  newP: Uint8ClampedArray,
   pw: number,
   ph: number,
-  cssW: number,
-  cssH: number,
   isOld: boolean,
   fade: number,
   thresh: number,
-) {
-  setCanvasSize(cvs, cssW, cssH)
+): ImageData {
   const fadeAlpha = 1 - fade / 100
   const bgR = 15, bgG = 15, bgB = 35
 
@@ -198,8 +151,10 @@ export function renderSideAnnotated(
   const od = outImg.data
   for (let p = 0; p < pw * ph; p++) {
     const i = p << 2
-    const ro = oldPixels[i], go = oldPixels[i + 1], bo = oldPixels[i + 2]
-    const rn = newPixels[i], gn = newPixels[i + 1], bn = newPixels[i + 2]
+    // Both pixels outside image bounds — keep transparent
+    if (oldP[i + 3] === 0 && newP[i + 3] === 0) { od[i + 3] = 0; continue }
+    const ro = oldP[i], go = oldP[i + 1], bo = oldP[i + 2]
+    const rn = newP[i], gn = newP[i + 1], bn = newP[i + 2]
     const r = isOld ? ro : rn
     const g = isOld ? go : gn
     const b = isOld ? bo : bn
@@ -231,6 +186,93 @@ export function renderSideAnnotated(
       od[i + 3] = 255
     }
   }
+  return outImg
+}
+
+// ─── Diff mode renderer (native resolution) ───
+
+export function renderDiff(
+  canvas: HTMLCanvasElement,
+  ctx: CanvasRenderingContext2D,
+  imgOld: CanvasImageSource,
+  imgNew: CanvasImageSource,
+  fade: number,
+  thresh: number,
+): { natW: number; natH: number } {
+  const { natW, natH } = getNaturalDimensions(imgOld, imgNew)
+  const pw = Math.round(natW * DPR)
+  const ph = Math.round(natH * DPR)
+  setCanvasBacking(canvas, pw, ph)
+
+  const dOld = rasterize(imgOld, pw, ph)
+  const dNew = rasterize(imgNew, pw, ph)
+  const mask = buildDiffMask(dOld.data, dNew.data, pw * ph, thresh)
+  const out = applyDiffColors(dOld.data, dNew.data, mask, fade, pw, ph)
+
+  ctx.setTransform(1, 0, 0, 1, 0, 0)
+  ctx.putImageData(out, 0, 0)
+  return { natW, natH }
+}
+
+// ─── Overlay mode renderer (native resolution) ───
+
+export function renderOverlay(
+  canvas: HTMLCanvasElement,
+  ctx: CanvasRenderingContext2D,
+  imgOld: CanvasImageSource,
+  imgNew: CanvasImageSource,
+  overlay: number,
+): { natW: number; natH: number } {
+  const { natW, natH } = getNaturalDimensions(imgOld, imgNew)
+  const pw = Math.round(natW * DPR)
+  const ph = Math.round(natH * DPR)
+  setCanvasBacking(canvas, pw, ph)
+  ctx.setTransform(DPR, 0, 0, DPR, 0, 0)
+  ctx.imageSmoothingEnabled = true
+  ctx.imageSmoothingQuality = 'high'
+  ctx.fillStyle = '#fff'
+  ctx.fillRect(0, 0, natW, natH)
+  ctx.globalAlpha = 1
+  ctx.drawImage(imgOld, 0, 0, natW, natH)
+  ctx.globalAlpha = overlay / 100
+  ctx.drawImage(imgNew, 0, 0, natW, natH)
+  ctx.globalAlpha = 1
+  return { natW, natH }
+}
+
+// ─── Side-by-side mode renderers (native resolution) ───
+
+function renderSideRaw(
+  cvs: HTMLCanvasElement,
+  cctx: CanvasRenderingContext2D,
+  img: CanvasImageSource,
+  natW: number,
+  natH: number,
+) {
+  const pw = Math.round(natW * DPR)
+  const ph = Math.round(natH * DPR)
+  setCanvasBacking(cvs, pw, ph)
+  cctx.setTransform(DPR, 0, 0, DPR, 0, 0)
+  cctx.imageSmoothingEnabled = true
+  cctx.imageSmoothingQuality = 'high'
+  cctx.fillStyle = '#fff'
+  cctx.fillRect(0, 0, natW, natH)
+  cctx.drawImage(img, 0, 0, natW, natH)
+}
+
+function renderSideAnnotated(
+  cvs: HTMLCanvasElement,
+  cctx: CanvasRenderingContext2D,
+  oldPixels: Uint8ClampedArray,
+  newPixels: Uint8ClampedArray,
+  pw: number,
+  ph: number,
+  isOld: boolean,
+  fade: number,
+  thresh: number,
+) {
+  setCanvasBacking(cvs, pw, ph)
+  const outImg = applySideAnnotatedColors(oldPixels, newPixels, pw, ph, isOld, fade, thresh)
   cctx.setTransform(1, 0, 0, 1, 0, 0)
   cctx.putImageData(outImg, 0, 0)
 }
@@ -244,22 +286,86 @@ export function renderSide(
   ctxR: CanvasRenderingContext2D,
   imgOld: CanvasImageSource,
   imgNew: CanvasImageSource,
-  zoom: number,
   fade: number,
   thresh: number,
   rawMode: boolean,
-) {
-  const { cssW, cssH, pw, ph } = computeCanvasDimensions(imgOld, imgNew, zoom)
+): { natW: number; natH: number } {
+  const { natW, natH } = getNaturalDimensions(imgOld, imgNew)
 
   if (rawMode) {
-    renderSideRaw(canvasL, ctxL, imgOld, cssW, cssH)
-    renderSideRaw(canvasR, ctxR, imgNew, cssW, cssH)
+    renderSideRaw(canvasL, ctxL, imgOld, natW, natH)
+    renderSideRaw(canvasR, ctxR, imgNew, natW, natH)
   } else {
+    const pw = Math.round(natW * DPR)
+    const ph = Math.round(natH * DPR)
     const dOld = rasterize(imgOld, pw, ph)
     const dNew = rasterize(imgNew, pw, ph)
-    renderSideAnnotated(canvasL, ctxL, dOld.data, dNew.data, pw, ph, cssW, cssH, true, fade, thresh)
-    renderSideAnnotated(canvasR, ctxR, dOld.data, dNew.data, pw, ph, cssW, cssH, false, fade, thresh)
+    renderSideAnnotated(canvasL, ctxL, dOld.data, dNew.data, pw, ph, true, fade, thresh)
+    renderSideAnnotated(canvasR, ctxR, dOld.data, dNew.data, pw, ph, false, fade, thresh)
   }
+  return { natW, natH }
+}
+
+// ─── Viewport-level hi-res renderers ───
+
+export function renderDiffViewport(
+  hiResCanvas: HTMLCanvasElement,
+  imgOld: CanvasImageSource,
+  imgNew: CanvasImageSource,
+  fade: number,
+  thresh: number,
+  srcX: number, srcY: number, srcW: number, srcH: number,
+  vpW: number, vpH: number,
+) {
+  const pw = Math.round(vpW * DPR)
+  const ph = Math.round(vpH * DPR)
+  setCanvasBacking(hiResCanvas, pw, ph)
+  hiResCanvas.style.width = vpW + 'px'
+  hiResCanvas.style.height = vpH + 'px'
+
+  const dOld = rasterizeRegion(imgOld, srcX, srcY, srcW, srcH, pw, ph)
+  const dNew = rasterizeRegion(imgNew, srcX, srcY, srcW, srcH, pw, ph)
+  const mask = buildDiffMask(dOld.data, dNew.data, pw * ph, thresh)
+  const out = applyDiffColors(dOld.data, dNew.data, mask, fade, pw, ph)
+
+  const ctx = hiResCanvas.getContext('2d', { willReadFrequently: true })!
+  ctx.setTransform(1, 0, 0, 1, 0, 0)
+  ctx.putImageData(out, 0, 0)
+}
+
+export function renderSideAnnotatedViewport(
+  hiResCanvasL: HTMLCanvasElement,
+  hiResCanvasR: HTMLCanvasElement,
+  imgOld: CanvasImageSource,
+  imgNew: CanvasImageSource,
+  fade: number,
+  thresh: number,
+  srcX: number, srcY: number, srcW: number, srcH: number,
+  vpW: number, vpH: number,
+) {
+  const pw = Math.round(vpW * DPR)
+  const ph = Math.round(vpH * DPR)
+
+  const dOld = rasterizeRegion(imgOld, srcX, srcY, srcW, srcH, pw, ph)
+  const dNew = rasterizeRegion(imgNew, srcX, srcY, srcW, srcH, pw, ph)
+
+  // Left (old)
+  setCanvasBacking(hiResCanvasL, pw, ph)
+  hiResCanvasL.style.width = vpW + 'px'
+  hiResCanvasL.style.height = vpH + 'px'
+  const outL = applySideAnnotatedColors(dOld.data, dNew.data, pw, ph, true, fade, thresh)
+  const ctxL = hiResCanvasL.getContext('2d', { willReadFrequently: true })!
+  ctxL.setTransform(1, 0, 0, 1, 0, 0)
+  ctxL.putImageData(outL, 0, 0)
+
+  // Right (new)
+  setCanvasBacking(hiResCanvasR, pw, ph)
+  hiResCanvasR.style.width = vpW + 'px'
+  hiResCanvasR.style.height = vpH + 'px'
+  const outR = applySideAnnotatedColors(dOld.data, dNew.data, pw, ph, false, fade, thresh)
+  const ctxR = hiResCanvasR.getContext('2d', { willReadFrequently: true })!
+  ctxR.setTransform(1, 0, 0, 1, 0, 0)
+  ctxR.putImageData(outR, 0, 0)
 }
 
 // ─── Change detection (for tab dots) ───
