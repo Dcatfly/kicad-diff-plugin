@@ -10,12 +10,14 @@ export default function Toolbar() {
   const thresh = useDiffStore((s) => s.thresh)
   const overlay = useDiffStore((s) => s.overlay)
   const zoom = useDiffStore((s) => s.zoom)
+  const bgColor = useDiffStore((s) => s.bgColor)
   const setViewMode = useDiffStore((s) => s.setViewMode)
   const setRawMode = useDiffStore((s) => s.setRawMode)
   const setFade = useDiffStore((s) => s.setFade)
   const setThresh = useDiffStore((s) => s.setThresh)
   const setOverlay = useDiffStore((s) => s.setOverlay)
   const setZoom = useDiffStore((s) => s.setZoom)
+  const setBgColor = useDiffStore((s) => s.setBgColor)
   const t = useTranslation()
 
   const isSide = viewMode === 'side'
@@ -64,6 +66,17 @@ export default function Toolbar() {
 
       {/* Separating divider */}
       <div className="w-px h-5 bg-border" />
+
+      {/* Background color */}
+      <label className="flex items-center gap-1.5 text-text-secondary whitespace-nowrap">
+        {t('paperColor')}
+        <input
+          type="color"
+          value={bgColor}
+          onChange={(e) => setBgColor(e.target.value)}
+          className="w-6 h-6 rounded cursor-pointer border border-border bg-transparent"
+        />
+      </label>
 
       {/* Sliders */}
       {showFadeThresh && (

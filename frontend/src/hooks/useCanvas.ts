@@ -49,6 +49,7 @@ export function useCanvas(
   const fade = useDiffStore((s) => s.fade)
   const thresh = useDiffStore((s) => s.thresh)
   const overlay = useDiffStore((s) => s.overlay)
+  const bgColor = useDiffStore((s) => s.bgColor)
   const setLoading = useDiffStore((s) => s.setLoading)
 
   // ─── Helpers for hi-res overlay ───
@@ -87,38 +88,51 @@ export function useCanvas(
       if (!scrollEl) return
 
       const scale = state.zoom / 100
-      const vpW = scrollEl.clientWidth
-      const vpH = scrollEl.clientHeight
       const srcX = scrollEl.scrollLeft / scale
       const srcY = scrollEl.scrollTop / scale
-      const srcW = vpW / scale
-      const srcH = vpH / scale
+      const srcW = scrollEl.clientWidth / scale
+      const srcH = scrollEl.clientHeight / scale
+
+      // Clamp source rect to image bounds — only render the overlap
+      const cx0 = Math.max(0, srcX)
+      const cy0 = Math.max(0, srcY)
+      const cx1 = Math.min(dims.natW, srcX + srcW)
+      const cy1 = Math.min(dims.natH, srcY + srcH)
+      const cw = cx1 - cx0
+      const ch = cy1 - cy0
+      if (cw <= 0 || ch <= 0) return
+
+      // Hi-res canvas offset & size in CSS pixels
+      const offsetX = (cx0 - srcX) * scale
+      const offsetY = (cy0 - srcY) * scale
+      const cssW = Math.round(cw * scale)
+      const cssH = Math.round(ch * scale)
 
       if (state.viewMode === 'diff' && hiResRef.current) {
-        // Position at scroll offset so it overlays the visible viewport
-        hiResRef.current.style.left = scrollEl.scrollLeft + 'px'
-        hiResRef.current.style.top = scrollEl.scrollTop + 'px'
+        hiResRef.current.style.left = (scrollEl.scrollLeft + offsetX) + 'px'
+        hiResRef.current.style.top = (scrollEl.scrollTop + offsetY) + 'px'
         renderDiffViewport(
           hiResRef.current,
           images.imgOld, images.imgNew,
           state.fade, state.thresh,
-          srcX, srcY, srcW, srcH, vpW, vpH,
+          cx0, cy0, cw, ch, cssW, cssH,
+          state.bgColor,
         )
         showHiRes(hiResRef)
       } else if (state.viewMode === 'side' && hiResLRef.current && hiResRRef.current) {
         const rightScrollEl = rightPanelRef?.current
-        // Position each overlay at its panel's scroll offset
-        hiResLRef.current.style.left = scrollEl.scrollLeft + 'px'
-        hiResLRef.current.style.top = scrollEl.scrollTop + 'px'
+        hiResLRef.current.style.left = (scrollEl.scrollLeft + offsetX) + 'px'
+        hiResLRef.current.style.top = (scrollEl.scrollTop + offsetY) + 'px'
         if (rightScrollEl) {
-          hiResRRef.current.style.left = rightScrollEl.scrollLeft + 'px'
-          hiResRRef.current.style.top = rightScrollEl.scrollTop + 'px'
+          hiResRRef.current.style.left = (rightScrollEl.scrollLeft + offsetX) + 'px'
+          hiResRRef.current.style.top = (rightScrollEl.scrollTop + offsetY) + 'px'
         }
         renderSideAnnotatedViewport(
           hiResLRef.current, hiResRRef.current,
           images.imgOld, images.imgNew,
           state.fade, state.thresh,
-          srcX, srcY, srcW, srcH, vpW, vpH,
+          cx0, cy0, cw, ch, cssW, cssH,
+          state.bgColor,
         )
         showHiRes(hiResLRef)
         showHiRes(hiResRRef)
@@ -150,13 +164,13 @@ export function useCanvas(
           if (!cvs) return
           const ctx = cvs.getContext('2d', { willReadFrequently: true })
           if (!ctx) return
-          dims = renderDiff(cvs, ctx, imgOld, imgNew, fade, thresh)
+          dims = renderDiff(cvs, ctx, imgOld, imgNew, fade, thresh, bgColor)
         } else if (viewMode === 'overlay') {
           const cvs = canvasRef?.current
           if (!cvs) return
           const ctx = cvs.getContext('2d')
           if (!ctx) return
-          dims = renderOverlay(cvs, ctx, imgOld, imgNew, overlay)
+          dims = renderOverlay(cvs, ctx, imgOld, imgNew, overlay, bgColor)
         } else if (viewMode === 'side') {
           const cvsL = canvasLRef?.current
           const cvsR = canvasRRef?.current
@@ -164,7 +178,7 @@ export function useCanvas(
           const ctxL = cvsL.getContext('2d', { willReadFrequently: true })
           const ctxR = cvsR.getContext('2d', { willReadFrequently: true })
           if (!ctxL || !ctxR) return
-          dims = renderSide(cvsL, ctxL, cvsR, ctxR, imgOld, imgNew, fade, thresh, rawMode)
+          dims = renderSide(cvsL, ctxL, cvsR, ctxR, imgOld, imgNew, fade, thresh, rawMode, bgColor)
         }
 
         if (dims) {
@@ -208,7 +222,7 @@ export function useCanvas(
       cancelAnimationFrame(rafId)
     }
     // zoom is intentionally excluded — read via useDiffStore.getState() inside and handled by the zoom effect below
-  }, [activeFileKey, file, viewMode, rawMode, fade, thresh, overlay, canvasRef, canvasLRef, canvasRRef, setLoading, hideHiRes, scheduleHiRes])
+  }, [activeFileKey, file, viewMode, rawMode, fade, thresh, overlay, bgColor, canvasRef, canvasLRef, canvasRRef, setLoading, hideHiRes, scheduleHiRes])
 
   // ─── Zoom effect: CSS-only, instant ───
 

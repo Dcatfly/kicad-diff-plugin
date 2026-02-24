@@ -25,9 +25,8 @@ function createPlaceholder(refImg: CanvasImageSource | null): HTMLCanvasElement 
   const oc = document.createElement('canvas')
   oc.width = refW
   oc.height = refH
-  const octx = oc.getContext('2d')!
-  octx.fillStyle = '#fff'
-  octx.fillRect(0, 0, oc.width, oc.height)
+  // Keep placeholder fully transparent so alpha-based blank detection works
+  // for added/deleted files.
   return oc
 }
 

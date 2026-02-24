@@ -187,6 +187,39 @@ def get_versions(repo_root: Path) -> dict:
 def export_sch_svg(kicad_cli: str, input_path: str, output_dir: str) -> None:
     """Export a schematic to SVG."""
     os.makedirs(output_dir, exist_ok=True)
+    cmd = [
+        kicad_cli,
+        "sch",
+        "export",
+        "svg",
+        "--no-background-color",
+        "-o",
+        str(output_dir),
+        str(input_path),
+    ]
+    try:
+        subprocess.run(cmd, capture_output=True, check=True)
+        return
+    except subprocess.CalledProcessError as err:
+        # Older KiCad versions may not support this flag.
+        def _text(v: bytes | str | None) -> str:
+            if v is None:
+                return ""
+            if isinstance(v, bytes):
+                return v.decode(errors="ignore")
+            return v
+
+        output = f"{_text(err.stdout)}\n{_text(err.stderr)}".lower()
+        unsupported_flag = (
+            "no-background-color" in output and (
+                "unknown option" in output
+                or "unrecognized option" in output
+                or "invalid option" in output
+            )
+        )
+        if not unsupported_flag:
+            raise
+
     subprocess.run(
         [kicad_cli, "sch", "export", "svg", "-o", str(output_dir), str(input_path)],
         capture_output=True, check=True,

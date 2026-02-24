@@ -21,6 +21,7 @@ interface DiffState {
   fade: number
   thresh: number
   overlay: number
+  bgColor: string
 
   // Files
   activeFileKey: string
@@ -47,6 +48,7 @@ interface DiffState {
   setFade: (fade: number) => void
   setThresh: (thresh: number) => void
   setOverlay: (overlay: number) => void
+  setBgColor: (color: string) => void
   setActiveFileKey: (key: string) => void
   setOldRef: (ref: string) => void
   setNewRef: (ref: string) => void
@@ -69,6 +71,7 @@ export const useDiffStore = create<DiffState>((set, get) => ({
   fade: 85,
   thresh: 20,
   overlay: 50,
+  bgColor: '#ffffff',
 
   // Files
   activeFileKey: '',
@@ -95,6 +98,7 @@ export const useDiffStore = create<DiffState>((set, get) => ({
   setFade: (fade) => set({ fade }),
   setThresh: (thresh) => set({ thresh }),
   setOverlay: (overlay) => set({ overlay }),
+  setBgColor: (bgColor) => set({ bgColor }),
   setActiveFileKey: (key) => set({ activeFileKey: key }),
   setOldRef: (ref) => set({ oldRef: ref }),
   setNewRef: (ref) => set({ newRef: ref }),
