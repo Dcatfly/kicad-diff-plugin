@@ -8,6 +8,6 @@ export default defineConfig({
   plugins: [react(), tailwindcss()],
   build: {
     outDir: fileURLToPath(new URL('../plugin/web', import.meta.url)),
-    emptyOutDir: false,
+    emptyOutDir: true,
   },
 })
