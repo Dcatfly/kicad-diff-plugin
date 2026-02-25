@@ -14,11 +14,7 @@ import tarfile
 import tempfile
 from pathlib import Path
 
-PCB_LAYERS = (
-    "F.Cu,B.Cu,F.Silkscreen,B.Silkscreen,F.Fab,B.Fab,"
-    "F.Courtyard,B.Courtyard,F.Mask,B.Mask,F.Paste,B.Paste,"
-    "Edge.Cuts,Dwgs.User,Cmts.User,Margin"
-)
+PCB_COMMON_LAYERS = "Edge.Cuts"
 
 KICAD_EXTENSIONS = (".kicad_sch", ".kicad_pcb")
 
@@ -226,15 +222,49 @@ def export_sch_svg(kicad_cli: str, input_path: str, output_dir: str) -> None:
     )
 
 
-def export_pcb_svg(kicad_cli: str, input_path: str, output_path: str) -> None:
-    """Export a PCB to SVG."""
-    os.makedirs(os.path.dirname(output_path), exist_ok=True)
+def parse_pcb_layers(pcb_path: str) -> list[str]:
+    """Parse a .kicad_pcb file and return list of layer canonical names.
+
+    Reads the (layers ...) section from the board file's S-expression format.
+    Returns layer names excluding those in PCB_COMMON_LAYERS.
+    """
+    with open(pcb_path, "r", encoding="utf-8", errors="replace") as f:
+        content = f.read()
+
+    # Match the top-level (layers ...) block
+    m = re.search(r'\(\s*layers\b(.*?)\n\s*\)', content, re.DOTALL)
+    if not m:
+        return []
+
+    layers_block = m.group(1)
+    # Each layer line: (number "name" type ...) or (number "name" type "alias")
+    layer_names: list[str] = []
+    for line_match in re.finditer(r'\(\s*\d+\s+"([^"]+)"', layers_block):
+        name = line_match.group(1)
+        if name not in PCB_COMMON_LAYERS.split(","):
+            layer_names.append(name)
+
+    return layer_names
+
+
+def export_pcb_svg_layers(
+    kicad_cli: str, input_path: str, output_dir: str, pcb_name: str,
+) -> None:
+    """Export PCB layers as individual SVGs using --mode-multi."""
+    layers = parse_pcb_layers(input_path)
+    if not layers:
+        return
+
+    pcb_dir = os.path.join(output_dir, f"pcb-layers-{pcb_name}")
+    os.makedirs(pcb_dir, exist_ok=True)
+
     subprocess.run(
         [kicad_cli, "pcb", "export", "svg",
-         "-o", str(output_path),
-         "--layers", PCB_LAYERS,
-         "--mode-single",
-         "--page-size-mode", "2",
+         "-o", pcb_dir,
+         "--layers", ",".join(layers),
+         "--common-layers", PCB_COMMON_LAYERS,
+         "--mode-multi",
+         "--page-size-mode", "0",
          "--sketch-pads-on-fab-layers",
          str(input_path)],
         capture_output=True, check=True,
@@ -256,14 +286,19 @@ def export_for_ref(
     repo_root: Path,
     output_dir: str,
     kicad_cli: str,
-) -> tuple[list[dict], bool]:
-    """Export all KiCad files for a given ref. Returns (file_list, cached)."""
+) -> tuple[dict, bool]:
+    """Export all KiCad files for a given ref.
+
+    Returns (result_dict, cached) where result_dict has:
+      - "files": list of schematic ExportFile dicts
+      - "pcb_layers": dict mapping pcb_name -> list of {layer, svg} dicts
+    """
     is_working = ref == "working"
     out_dir = Path(output_dir) / ("working" if is_working else ref)
 
     complete_marker = out_dir / ".complete"
     if not is_working and complete_marker.exists():
-        return build_file_list(out_dir, output_dir), True
+        return build_structured_result(out_dir, output_dir), True
 
     # Clean stale working directory to avoid ghost files from deleted sources
     if is_working and out_dir.exists():
@@ -305,8 +340,9 @@ def export_for_ref(
                 if ext == ".kicad_sch":
                     export_sch_svg(kicad_cli, str(src_path), str(out_dir))
                 elif ext == ".kicad_pcb":
-                    pcb_svg = out_dir / f"{name}-pcb.svg"
-                    export_pcb_svg(kicad_cli, str(src_path), str(pcb_svg))
+                    export_pcb_svg_layers(
+                        kicad_cli, str(src_path), str(out_dir), name,
+                    )
             except subprocess.CalledProcessError as e:
                 print(f"[kicad-diff] Warning: export failed for {filepath}: {e}")
                 continue
@@ -318,33 +354,51 @@ def export_for_ref(
         if tmp_dir:
             shutil.rmtree(tmp_dir, ignore_errors=True)
 
-    return build_file_list(out_dir, output_dir), False
+    return build_structured_result(out_dir, output_dir), False
 
 
-def build_file_list(out_dir: Path, output_dir: str) -> list[dict]:
-    """Build the file list from exported SVGs."""
-    files: list[dict] = []
+def build_structured_result(out_dir: Path, output_dir: str) -> dict:
+    """Build structured result with schematic files and PCB layer groups."""
     out_dir = Path(out_dir)
+    files: list[dict] = []
+    pcb_layers: dict[str, list[dict]] = {}
+
     if not out_dir.exists():
-        return files
+        return {"files": files, "pcb_layers": pcb_layers}
+
+    # Schematic SVGs (top-level *.svg files)
     for svg in sorted(out_dir.glob("*.svg")):
         name = svg.stem
-        if name.endswith("-pcb"):
-            display_name = name[:-4]
-            file_type = "pcb"
-            key = "pcb-" + display_name
-        else:
-            display_name = name
-            file_type = "sch"
-            key = "sch-" + name
         rel_path = svg.relative_to(output_dir)
         files.append({
-            "key": key,
-            "name": display_name,
-            "type": file_type,
+            "key": "sch-" + name,
+            "name": name,
+            "type": "sch",
             "svg": "output/" + str(rel_path).replace("\\", "/"),
         })
-    return files
+
+    # PCB layer directories (pcb-layers-{name}/)
+    for layer_dir in sorted(out_dir.iterdir()):
+        if not layer_dir.is_dir() or not layer_dir.name.startswith("pcb-layers-"):
+            continue
+        pcb_name = layer_dir.name[len("pcb-layers-"):]
+        layer_files: list[dict] = []
+        for svg in sorted(layer_dir.glob("*.svg")):
+            # Filename: {pcb_name}-{Layer_Name}.svg where dots are underscores
+            fname = svg.name
+            prefix = pcb_name + "-"
+            if fname.startswith(prefix):
+                layer_part = fname[len(prefix):-4]  # strip prefix and .svg
+                layer_name = layer_part.replace("_", ".")
+                rel_path = svg.relative_to(output_dir)
+                layer_files.append({
+                    "layer": layer_name,
+                    "svg": "output/" + str(rel_path).replace("\\", "/"),
+                })
+        if layer_files:
+            pcb_layers[pcb_name] = layer_files
+
+    return {"files": files, "pcb_layers": pcb_layers}
 
 
 def resolve_ref(ref: str, repo_root: Path) -> str:

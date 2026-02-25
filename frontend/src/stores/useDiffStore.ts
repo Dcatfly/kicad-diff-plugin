@@ -4,13 +4,15 @@ import { create } from 'zustand'
 import type {
   ViewMode,
   Locale,
+  SidebarTab,
   VersionData,
   VersionMap,
   FilePair,
+  LayerPair,
   ExportResult,
 } from '../types'
 import { fetchVersions, exportVersion } from '../lib/api'
-import { buildFilePairs } from '../lib/filePairing'
+import { buildFilePairs, buildLayerPairs } from '../lib/filePairing'
 import { translate } from '../lib/i18n'
 
 interface DiffState {
@@ -23,10 +25,29 @@ interface DiffState {
   overlay: number
   bgColor: string
 
-  // Files
-  activeFileKey: string
-  fileKeys: string[]
-  files: Record<string, FilePair>
+  // Sidebar
+  sidebarTab: SidebarTab
+  setSidebarTab: (tab: SidebarTab) => void
+
+  // Schematics (single-select)
+  schematicKeys: string[]
+  schematics: Record<string, FilePair>
+  activeSchematicKey: string
+  setActiveSchematicKey: (key: string) => void
+  updateSchematicChanges: (key: string, hasChanges: boolean | null) => void
+
+  // PCB layers (multi-select)
+  pcbName: string
+  pcbLayers: string[]
+  pcbLayerPairs: Record<string, LayerPair>
+  selectedPcbLayers: string[]
+  togglePcbLayer: (layer: string) => void
+  selectChangedPcbLayers: () => void
+  deselectAllPcbLayers: () => void
+  updateLayerChanges: (layer: string, hasChanges: boolean | null) => void
+
+  // Smart default tracking
+  _userHasInteracted: boolean
 
   // Versions
   versionData: VersionData | null
@@ -49,13 +70,11 @@ interface DiffState {
   setThresh: (thresh: number) => void
   setOverlay: (overlay: number) => void
   setBgColor: (color: string) => void
-  setActiveFileKey: (key: string) => void
   setOldRef: (ref: string) => void
   setNewRef: (ref: string) => void
   toggleLocale: () => void
   setLoading: (loading: boolean, text?: string) => void
   setExportStatus: (status: string) => void
-  updateFileChanges: (key: string, hasChanges: boolean | null) => void
   initVersions: () => Promise<void>
   compare: () => Promise<void>
 }
@@ -73,10 +92,87 @@ export const useDiffStore = create<DiffState>((set, get) => ({
   overlay: 50,
   bgColor: '#ffffff',
 
-  // Files
-  activeFileKey: '',
-  fileKeys: [],
-  files: {},
+  // Sidebar
+  sidebarTab: 'pcb',
+  setSidebarTab: (tab) => set({ sidebarTab: tab, _userHasInteracted: true }),
+
+  // Schematics
+  schematicKeys: [],
+  schematics: {},
+  activeSchematicKey: '',
+  setActiveSchematicKey: (key) =>
+    set({ activeSchematicKey: key, _userHasInteracted: true }),
+  updateSchematicChanges: (key, hasChanges) =>
+    set((s) => {
+      const sch = s.schematics[key]
+      if (!sch) return s
+      const newSchematics = { ...s.schematics, [key]: { ...sch, hasChanges } }
+
+      // Smart default: after all detection done, auto-select first changed file
+      const update: Partial<DiffState> = { schematics: newSchematics }
+      if (!s._userHasInteracted) {
+        const allDone = s.schematicKeys.every((k) =>
+          k === key ? hasChanges !== null : newSchematics[k]?.hasChanges !== null,
+        )
+        if (allDone) {
+          const firstChanged = s.schematicKeys.find(
+            (k) => newSchematics[k]?.hasChanges === true,
+          )
+          if (firstChanged) {
+            update.activeSchematicKey = firstChanged
+          }
+        }
+      }
+      return update
+    }),
+
+  // PCB layers
+  pcbName: '',
+  pcbLayers: [],
+  pcbLayerPairs: {},
+  selectedPcbLayers: [],
+  togglePcbLayer: (layer) =>
+    set((s) => {
+      const sel = s.selectedPcbLayers.includes(layer)
+        ? s.selectedPcbLayers.filter((l) => l !== layer)
+        : [...s.selectedPcbLayers, layer]
+      return { selectedPcbLayers: sel, _userHasInteracted: true }
+    }),
+  selectChangedPcbLayers: () =>
+    set((s) => ({
+      selectedPcbLayers: s.pcbLayers.filter(
+        (l) => s.pcbLayerPairs[l]?.hasChanges === true,
+      ),
+      _userHasInteracted: true,
+    })),
+  deselectAllPcbLayers: () =>
+    set({ selectedPcbLayers: [], _userHasInteracted: true }),
+  updateLayerChanges: (layer, hasChanges) =>
+    set((s) => {
+      const lp = s.pcbLayerPairs[layer]
+      if (!lp) return s
+      const newPairs = { ...s.pcbLayerPairs, [layer]: { ...lp, hasChanges } }
+
+      const update: Partial<DiffState> = { pcbLayerPairs: newPairs }
+      if (!s._userHasInteracted) {
+        const allDone = s.pcbLayers.every((l) =>
+          l === layer ? hasChanges !== null : newPairs[l]?.hasChanges !== null,
+        )
+        if (allDone) {
+          const changedLayers = s.pcbLayers.filter(
+            (l) => newPairs[l]?.hasChanges === true,
+          )
+          if (changedLayers.length > 0) {
+            update.selectedPcbLayers = changedLayers
+          }
+          // If none changed, keep all selected
+        }
+      }
+      return update
+    }),
+
+  // Smart default tracking
+  _userHasInteracted: false,
 
   // Versions
   versionData: null,
@@ -86,7 +182,7 @@ export const useDiffStore = create<DiffState>((set, get) => ({
 
   // UI
   locale: detectInitialLocale(),
-  loading: false,
+  loading: true,
   loadingText: '',
   exportStatus: '',
   comparing: false,
@@ -99,7 +195,6 @@ export const useDiffStore = create<DiffState>((set, get) => ({
   setThresh: (thresh) => set({ thresh }),
   setOverlay: (overlay) => set({ overlay }),
   setBgColor: (bgColor) => set({ bgColor }),
-  setActiveFileKey: (key) => set({ activeFileKey: key }),
   setOldRef: (ref) => set({ oldRef: ref }),
   setNewRef: (ref) => set({ newRef: ref }),
 
@@ -110,15 +205,6 @@ export const useDiffStore = create<DiffState>((set, get) => ({
     set({ loading, loadingText: text ?? '' }),
 
   setExportStatus: (status) => set({ exportStatus: status }),
-
-  updateFileChanges: (key, hasChanges) =>
-    set((s) => {
-      const file = s.files[key]
-      if (!file) return s
-      return {
-        files: { ...s.files, [key]: { ...file, hasChanges } },
-      }
-    }),
 
   initVersions: async () => {
     const { locale } = get()
@@ -163,7 +249,10 @@ export const useDiffStore = create<DiffState>((set, get) => ({
 
   compare: async () => {
     const { oldRef, newRef, locale } = get()
-    if (!oldRef || !newRef) return
+    if (!oldRef || !newRef) {
+      set({ loading: false })
+      return
+    }
     const t = (k: string) => translate(locale, k)
 
     set({ comparing: true, loading: true, loadingText: t('exporting') })
@@ -172,7 +261,6 @@ export const useDiffStore = create<DiffState>((set, get) => ({
       let oldResult: ExportResult
       let newResult: ExportResult
       if (oldRef === newRef) {
-        // Same ref (e.g. working vs working): export once, reuse result
         oldResult = await exportVersion(oldRef)
         newResult = oldResult
       } else {
@@ -191,19 +279,35 @@ export const useDiffStore = create<DiffState>((set, get) => ({
         return
       }
 
-      const { keys, files } = buildFilePairs(
+      // Build schematic file pairs
+      const { keys: schKeys, files: schFiles } = buildFilePairs(
         oldResult,
         newResult,
       )
 
-      if (keys.length === 0) {
+      // Build PCB layer pairs
+      const { pcbName, layers, pairs } = buildLayerPairs(
+        oldResult,
+        newResult,
+      )
+
+      const hasPcb = layers.length > 0
+      const hasSch = schKeys.length > 0
+
+      if (!hasPcb && !hasSch) {
         set({
-          fileKeys: [],
-          files: {},
-          activeFileKey: '',
+          schematicKeys: [],
+          schematics: {},
+          activeSchematicKey: '',
+          pcbName: '',
+          pcbLayers: [],
+          pcbLayerPairs: {},
+          selectedPcbLayers: [],
+          sidebarTab: 'sch',
           exportStatus: t('noKicadFiles'),
           loading: false,
           comparing: false,
+          _userHasInteracted: false,
         })
         return
       }
@@ -212,9 +316,23 @@ export const useDiffStore = create<DiffState>((set, get) => ({
       const newCached = newResult.cached ? ` ${t('cached')}` : ''
 
       set({
-        fileKeys: keys,
-        files,
-        activeFileKey: keys[0],
+        // Schematics
+        schematicKeys: schKeys,
+        schematics: schFiles,
+        activeSchematicKey: schKeys[0] ?? '',
+
+        // PCB
+        pcbName,
+        pcbLayers: layers,
+        pcbLayerPairs: pairs,
+        selectedPcbLayers: [], // empty until change detection selects changed layers
+
+        // Sidebar: prefer PCB tab when PCB layers exist
+        sidebarTab: hasPcb ? 'pcb' : 'sch',
+
+        // Reset smart default tracking
+        _userHasInteracted: false,
+
         exportStatus: `${t('ready')}${oldCached}${newCached}`,
         loading: false,
         comparing: false,

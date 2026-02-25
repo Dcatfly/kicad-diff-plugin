@@ -4,7 +4,8 @@
 
 import { useCallback, useEffect, useLayoutEffect, useRef } from 'react'
 import { useDiffStore } from '../stores/useDiffStore'
-import { loadFilePair } from './useImageLoader'
+import { loadFilePair, loadLayerImageArrays } from './useImageLoader'
+import type { ImageSource } from '../lib/renderer'
 import {
   renderDiff,
   renderOverlay,
@@ -33,7 +34,7 @@ export function useCanvas(
   const renderTokenRef = useRef(0)
   const pendingScrollRef = useRef<PendingScroll | null>(null)
   const contentDimsRef = useRef<{ natW: number; natH: number } | null>(null)
-  const imagesRef = useRef<{ imgOld: CanvasImageSource; imgNew: CanvasImageSource } | null>(null)
+  const imagesRef = useRef<{ imgOld: ImageSource; imgNew: ImageSource } | null>(null)
   const hiResTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   const hiResRef = useRef<HTMLCanvasElement>(null)
@@ -42,8 +43,12 @@ export function useCanvas(
 
   usePanZoom(containerRef, pendingScrollRef, leftPanelRef, rightPanelRef)
 
-  const activeFileKey = useDiffStore((s) => s.activeFileKey)
-  const file = useDiffStore((s) => s.activeFileKey ? s.files[s.activeFileKey] : undefined)
+  const sidebarTab = useDiffStore((s) => s.sidebarTab)
+  const schematic = useDiffStore((s) =>
+    s.activeSchematicKey ? s.schematics[s.activeSchematicKey] : undefined,
+  )
+  const pcbLayerPairs = useDiffStore((s) => s.pcbLayerPairs)
+  const selectedPcbLayers = useDiffStore((s) => s.selectedPcbLayers)
   const viewMode = useDiffStore((s) => s.viewMode)
   const rawMode = useDiffStore((s) => s.rawMode)
   const zoom = useDiffStore((s) => s.zoom)
@@ -159,7 +164,28 @@ export function useCanvas(
   // Does NOT depend on zoom — zoom is applied separately via CSS.
 
   useEffect(() => {
-    if (!activeFileKey || !file) return
+    // Need either a schematic or selected PCB layers to render
+    const hasContent =
+      sidebarTab === 'sch'
+        ? !!schematic
+        : selectedPcbLayers.length > 0
+
+    if (!hasContent) {
+      // Clear stale canvas content and state
+      imagesRef.current = null
+      contentDimsRef.current = null
+      hideHiRes()
+      for (const ref of [canvasRef, canvasLRef, canvasRRef]) {
+        const cvs = ref?.current
+        if (cvs) {
+          cvs.width = 0
+          cvs.height = 0
+          cvs.style.width = ''
+          cvs.style.height = ''
+        }
+      }
+      return
+    }
 
     const token = ++renderTokenRef.current
     let cancelled = false
@@ -168,7 +194,17 @@ export function useCanvas(
       setLoading(true, '')
 
       try {
-        const { imgOld, imgNew } = await loadFilePair(file.oldSvg, file.newSvg)
+        let imgOld: ImageSource
+        let imgNew: ImageSource
+
+        if (sidebarTab === 'sch' && schematic) {
+          ;({ imgOld, imgNew } = await loadFilePair(schematic.oldSvg, schematic.newSvg))
+        } else {
+          const activePairs = selectedPcbLayers
+            .map((l) => pcbLayerPairs[l])
+            .filter(Boolean)
+          ;({ imgOld, imgNew } = await loadLayerImageArrays(activePairs))
+        }
         if (cancelled || token !== renderTokenRef.current) return
 
         imagesRef.current = { imgOld, imgNew }
@@ -237,7 +273,7 @@ export function useCanvas(
       cancelAnimationFrame(rafId)
     }
     // zoom is intentionally excluded — read via useDiffStore.getState() inside and handled by the zoom effect below
-  }, [activeFileKey, file, viewMode, rawMode, fade, thresh, overlay, bgColor, canvasRef, canvasLRef, canvasRRef, setLoading, hideHiRes, scheduleHiRes])
+  }, [sidebarTab, schematic, selectedPcbLayers, pcbLayerPairs, viewMode, rawMode, fade, thresh, overlay, bgColor, canvasRef, canvasLRef, canvasRRef, setLoading, hideHiRes, scheduleHiRes])
 
   // ─── Zoom effect: CSS-only, instant ───
 

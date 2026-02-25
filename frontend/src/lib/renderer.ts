@@ -1,8 +1,11 @@
 // ─── Pure rendering functions: pixel-level diff, overlay, side-by-side ───
 
-const DPR = window.devicePixelRatio || 1
+export const DPR = window.devicePixelRatio || 1
 
 // ─── Types ───
+
+/** Single image or array of images to composite (source-over). */
+export type ImageSource = CanvasImageSource | CanvasImageSource[]
 
 export interface ViewportRegion {
   srcX: number; srcY: number; srcW: number; srcH: number
@@ -11,24 +14,39 @@ export interface ViewportRegion {
 
 // ─── Pixel helpers ───
 
-export function getSourceWidth(src: CanvasImageSource | null): number {
-  if (!src) return 0
+function singleSourceWidth(src: CanvasImageSource): number {
   if (src instanceof HTMLImageElement) return src.naturalWidth || src.width
   if (src instanceof HTMLCanvasElement) return src.width
   return 0
 }
 
-export function getSourceHeight(src: CanvasImageSource | null): number {
-  if (!src) return 0
+function singleSourceHeight(src: CanvasImageSource): number {
   if (src instanceof HTMLImageElement) return src.naturalHeight || src.height
   if (src instanceof HTMLCanvasElement) return src.height
   return 0
 }
 
-function getNaturalDimensions(
-  imgOld: CanvasImageSource,
-  imgNew: CanvasImageSource,
-) {
+export function getSourceWidth(src: ImageSource | null): number {
+  if (!src) return 0
+  if (Array.isArray(src)) {
+    let max = 0
+    for (const s of src) max = Math.max(max, singleSourceWidth(s))
+    return max
+  }
+  return singleSourceWidth(src)
+}
+
+export function getSourceHeight(src: ImageSource | null): number {
+  if (!src) return 0
+  if (Array.isArray(src)) {
+    let max = 0
+    for (const s of src) max = Math.max(max, singleSourceHeight(s))
+    return max
+  }
+  return singleSourceHeight(src)
+}
+
+function getNaturalDimensions(imgOld: ImageSource, imgNew: ImageSource) {
   const natW = Math.max(getSourceWidth(imgOld), getSourceWidth(imgNew))
   const natH = Math.max(getSourceHeight(imgOld), getSourceHeight(imgNew))
   return { natW, natH }
@@ -47,21 +65,67 @@ export function applyZoom(cvs: HTMLCanvasElement, natW: number, natH: number, zo
   cvs.style.height = Math.round(natH * scale) + 'px'
 }
 
-function rasterize(img: CanvasImageSource, pw: number, ph: number): ImageData {
+// ─── Internal compositing helpers ───
+// These draw one or more images onto a context, preserving source-over compositing.
+// When compositing multiple layers (array), each layer is drawn with reduced
+// opacity so that lower layers remain visible — matching KiCad's internal
+// multi-layer rendering behaviour.
+
+const LAYER_ALPHA = 0.4
+
+function drawAllFull(
+  ctx: OffscreenCanvasRenderingContext2D | CanvasRenderingContext2D,
+  imgs: ImageSource,
+  dw: number,
+  dh: number,
+) {
+  const arr = Array.isArray(imgs) ? imgs : [imgs]
+  if (arr.length <= 1) {
+    for (const img of arr) ctx.drawImage(img, 0, 0, dw, dh)
+    return
+  }
+  const saved = ctx.globalAlpha
+  for (const img of arr) {
+    ctx.globalAlpha = saved * LAYER_ALPHA
+    ctx.drawImage(img, 0, 0, dw, dh)
+  }
+  ctx.globalAlpha = saved
+}
+
+function drawAllRegion(
+  ctx: OffscreenCanvasRenderingContext2D | CanvasRenderingContext2D,
+  imgs: ImageSource,
+  sx: number, sy: number, sw: number, sh: number,
+  dx: number, dy: number, dw: number, dh: number,
+) {
+  const arr = Array.isArray(imgs) ? imgs : [imgs]
+  if (arr.length <= 1) {
+    for (const img of arr) ctx.drawImage(img, sx, sy, sw, sh, dx, dy, dw, dh)
+    return
+  }
+  const saved = ctx.globalAlpha
+  for (const img of arr) {
+    ctx.globalAlpha = saved * LAYER_ALPHA
+    ctx.drawImage(img, sx, sy, sw, sh, dx, dy, dw, dh)
+  }
+  ctx.globalAlpha = saved
+}
+
+function rasterize(img: ImageSource, pw: number, ph: number): ImageData {
   const oc = new OffscreenCanvas(pw, ph)
   const octx = oc.getContext('2d')!
-  octx.drawImage(img, 0, 0, pw, ph)
+  drawAllFull(octx, img, pw, ph)
   return octx.getImageData(0, 0, pw, ph)
 }
 
 function rasterizeRegion(
-  img: CanvasImageSource,
+  img: ImageSource,
   sx: number, sy: number, sw: number, sh: number,
   pw: number, ph: number,
 ): ImageData {
   const oc = new OffscreenCanvas(pw, ph)
   const octx = oc.getContext('2d')!
-  octx.drawImage(img, sx, sy, sw, sh, 0, 0, pw, ph)
+  drawAllRegion(octx, img, sx, sy, sw, sh, 0, 0, pw, ph)
   return octx.getImageData(0, 0, pw, ph)
 }
 
@@ -177,18 +241,16 @@ function applySideAnnotatedColors(
     const r = isOld ? ro : rn
     const g = isOld ? go : gn
     const b = isOld ? bo : bn
-    const oldBlank = aO === 0
-    const newBlank = aN === 0
     const diff = Math.max(
       Math.abs(ro - rn),
       Math.abs(go - gn),
       Math.abs(bo - bn),
       Math.abs(aO - aN),
     )
-    const isDirectionalDiff =
-      diff > thresh && (isOld ? !oldBlank && newBlank : oldBlank && !newBlank)
 
-    if (isDirectionalDiff) {
+    // Highlight only when this side has content at this pixel
+    const mySideHasContent = isOld ? aO > 0 : aN > 0
+    if (diff > thresh && mySideHasContent) {
       if (isOld) {
         od[i] = Math.min(255, Math.round(r * 0.5 + 120))
         od[i + 1] = Math.round(g * 0.35)
@@ -214,8 +276,8 @@ function applySideAnnotatedColors(
 export function renderDiff(
   canvas: HTMLCanvasElement,
   ctx: CanvasRenderingContext2D,
-  imgOld: CanvasImageSource,
-  imgNew: CanvasImageSource,
+  imgOld: ImageSource,
+  imgNew: ImageSource,
   fade: number,
   thresh: number,
   bgColor: string,
@@ -240,8 +302,8 @@ export function renderDiff(
 export function renderOverlay(
   canvas: HTMLCanvasElement,
   ctx: CanvasRenderingContext2D,
-  imgOld: CanvasImageSource,
-  imgNew: CanvasImageSource,
+  imgOld: ImageSource,
+  imgNew: ImageSource,
   overlay: number,
   bgColor: string,
   viewport?: ViewportRegion,
@@ -264,13 +326,13 @@ export function renderOverlay(
   ctx.fillRect(0, 0, drawW, drawH)
   ctx.globalAlpha = 1
   if (vp) {
-    ctx.drawImage(imgOld, vp.srcX, vp.srcY, vp.srcW, vp.srcH, 0, 0, drawW, drawH)
+    drawAllRegion(ctx, imgOld, vp.srcX, vp.srcY, vp.srcW, vp.srcH, 0, 0, drawW, drawH)
     ctx.globalAlpha = overlay / 100
-    ctx.drawImage(imgNew, vp.srcX, vp.srcY, vp.srcW, vp.srcH, 0, 0, drawW, drawH)
+    drawAllRegion(ctx, imgNew, vp.srcX, vp.srcY, vp.srcW, vp.srcH, 0, 0, drawW, drawH)
   } else {
-    ctx.drawImage(imgOld, 0, 0, natW, natH)
+    drawAllFull(ctx, imgOld, natW, natH)
     ctx.globalAlpha = overlay / 100
-    ctx.drawImage(imgNew, 0, 0, natW, natH)
+    drawAllFull(ctx, imgNew, natW, natH)
   }
   ctx.globalAlpha = 1
   return { natW, natH }
@@ -281,7 +343,7 @@ export function renderOverlay(
 export function renderSideRaw(
   cvs: HTMLCanvasElement,
   cctx: CanvasRenderingContext2D,
-  img: CanvasImageSource,
+  img: ImageSource,
   natW: number,
   natH: number,
   bgColor: string,
@@ -303,9 +365,9 @@ export function renderSideRaw(
   cctx.fillStyle = bgColor
   cctx.fillRect(0, 0, drawW, drawH)
   if (vp) {
-    cctx.drawImage(img, vp.srcX, vp.srcY, vp.srcW, vp.srcH, 0, 0, drawW, drawH)
+    drawAllRegion(cctx, img, vp.srcX, vp.srcY, vp.srcW, vp.srcH, 0, 0, drawW, drawH)
   } else {
-    cctx.drawImage(img, 0, 0, natW, natH)
+    drawAllFull(cctx, img, natW, natH)
   }
 }
 
@@ -334,8 +396,8 @@ export function renderSide(
   ctxL: CanvasRenderingContext2D,
   canvasR: HTMLCanvasElement,
   ctxR: CanvasRenderingContext2D,
-  imgOld: CanvasImageSource,
-  imgNew: CanvasImageSource,
+  imgOld: ImageSource,
+  imgNew: ImageSource,
   fade: number,
   thresh: number,
   rawMode: boolean,
@@ -361,8 +423,8 @@ export function renderSide(
 
 export function renderDiffViewport(
   hiResCanvas: HTMLCanvasElement,
-  imgOld: CanvasImageSource,
-  imgNew: CanvasImageSource,
+  imgOld: ImageSource,
+  imgNew: ImageSource,
   fade: number,
   thresh: number,
   srcX: number, srcY: number, srcW: number, srcH: number,
@@ -388,8 +450,8 @@ export function renderDiffViewport(
 export function renderSideAnnotatedViewport(
   hiResCanvasL: HTMLCanvasElement,
   hiResCanvasR: HTMLCanvasElement,
-  imgOld: CanvasImageSource,
-  imgNew: CanvasImageSource,
+  imgOld: ImageSource,
+  imgNew: ImageSource,
   fade: number,
   thresh: number,
   srcX: number, srcY: number, srcW: number, srcH: number,
@@ -426,11 +488,12 @@ export function renderSideAnnotatedViewport(
 export function detectChanges(
   imgOld: CanvasImageSource,
   imgNew: CanvasImageSource,
+  thresh: number,
 ): boolean {
   const size = 400
   const w = size
-  const baseW = Math.max(getSourceWidth(imgOld), getSourceWidth(imgNew)) || 1
-  const baseH = Math.max(getSourceHeight(imgOld), getSourceHeight(imgNew)) || 1
+  const baseW = Math.max(singleSourceWidth(imgOld), singleSourceWidth(imgNew)) || 1
+  const baseH = Math.max(singleSourceHeight(imgOld), singleSourceHeight(imgNew)) || 1
   const aspect = baseH / baseW
   const h = Math.round(size * aspect) || size
 
@@ -450,7 +513,7 @@ export function detectChanges(
       Math.abs(d1[i + 2] - d2[i + 2]),
       Math.abs(d1[i + 3] - d2[i + 3]),
     )
-    if (diff > 20) return true
+    if (diff > thresh) return true
   }
   return false
 }

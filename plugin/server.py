@@ -18,7 +18,7 @@ from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlparse
+from urllib.parse import unquote, urlparse
 
 from diff_engine import (
     export_for_ref,
@@ -144,14 +144,15 @@ class DiffRequestHandler(BaseHTTPRequestHandler):
                     self._export_locks[actual_ref] = ref_lock
 
             with ref_lock:
-                files, cached = export_for_ref(
+                result, cached = export_for_ref(
                     actual_ref, self._repo_root, self._output_dir, self._kicad_cli,
                 )
             self._send_json({
                 "status": "ok",
                 "ref": actual_ref,
                 "cached": cached,
-                "files": files,
+                "files": result["files"],
+                "pcb_layers": result["pcb_layers"],
             })
         except Exception as e:
             print(f"[kicad-diff] Error in /api/export for ref={ref}: {e}")
@@ -160,7 +161,7 @@ class DiffRequestHandler(BaseHTTPRequestHandler):
     # ── File serving ──
 
     def _serve_output_file(self, path: str) -> None:
-        rel = path[len("/output/"):]
+        rel = unquote(path[len("/output/"):])
         filepath = Path(self._output_dir) / rel
         if not filepath.exists() or not filepath.is_file():
             self.send_error(HTTPStatus.NOT_FOUND)

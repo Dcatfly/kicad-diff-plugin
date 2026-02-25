@@ -1,7 +1,8 @@
-// ─── File pairing logic: match old/new exported files ───
+// ─── File pairing logic: match old/new exported files and PCB layers ───
 
-import type { ExportResult, FilePair, FileStatus } from '../types'
+import type { ExportResult, FilePair, FileStatus, LayerPair } from '../types'
 
+/** Pair schematic files from old/new export results. */
 export function buildFilePairs(
   oldResult: ExportResult,
   newResult: ExportResult,
@@ -33,4 +34,43 @@ export function buildFilePairs(
   }
 
   return { keys, files }
+}
+
+/** Pair PCB layers from old/new export results. */
+export function buildLayerPairs(
+  oldResult: ExportResult | null,
+  newResult: ExportResult | null,
+): { pcbName: string; layers: string[]; pairs: Record<string, LayerPair> } {
+  const oldLayers = oldResult?.pcb_layers ?? {}
+  const newLayers = newResult?.pcb_layers ?? {}
+
+  // NOTE: Only the first PCB board is used. Multi-board projects are not
+  // yet supported — additional boards in pcb_layers will be ignored.
+  const allNames = new Set([...Object.keys(oldLayers), ...Object.keys(newLayers)])
+  const pcbName = [...allNames][0] ?? ''
+
+  if (!pcbName) {
+    return { pcbName: '', layers: [], pairs: {} }
+  }
+
+  const oldByLayer: Record<string, string> = {}
+  for (const f of oldLayers[pcbName] ?? []) oldByLayer[f.layer] = f.svg
+  const newByLayer: Record<string, string> = {}
+  for (const f of newLayers[pcbName] ?? []) newByLayer[f.layer] = f.svg
+
+  const allLayerSet = new Set([...Object.keys(oldByLayer), ...Object.keys(newByLayer)])
+  const layers = [...allLayerSet]
+
+  const pairs: Record<string, LayerPair> = {}
+  for (const layer of layers) {
+    pairs[layer] = {
+      layer,
+      pcbName,
+      oldSvg: oldByLayer[layer] ?? null,
+      newSvg: newByLayer[layer] ?? null,
+      hasChanges: null,
+    }
+  }
+
+  return { pcbName, layers, pairs }
 }

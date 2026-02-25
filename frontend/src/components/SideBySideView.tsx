@@ -3,6 +3,7 @@ import { useDiffStore } from '../stores/useDiffStore'
 import { useTranslation, translate } from '../lib/i18n'
 import { useCanvas } from '../hooks/useCanvas'
 import LoadingOverlay from './LoadingOverlay'
+import EmptyHint from './EmptyHint'
 
 function getVersionLabel(
   ref: string,
@@ -32,9 +33,20 @@ export default function SideBySideView() {
   const locale = useDiffStore((s) => s.locale)
   const t = useTranslation()
 
+  const sidebarTab = useDiffStore((s) => s.sidebarTab)
+  const activeSchematicKey = useDiffStore((s) => s.activeSchematicKey)
+  const selectedPcbLayers = useDiffStore((s) => s.selectedPcbLayers)
+
   const { hiResLRef, hiResRRef } = useCanvas(
     containerRef, undefined, canvasLRef, canvasRRef, leftPanelRef, rightPanelRef,
   )
+
+  const loading = useDiffStore((s) => s.loading)
+
+  const hasContent =
+    sidebarTab === 'sch' ? !!activeSchematicKey : selectedPcbLayers.length > 0
+  const hint = sidebarTab === 'sch' ? t('selectSchematic') : t('selectPcbLayers')
+  const showHint = !hasContent && !loading
 
   const oldLabel = oldRef
     ? `${t('sideOld')} ${getVersionLabel(oldRef, versionMap, locale)}`
@@ -76,6 +88,7 @@ export default function SideBySideView() {
         />
       </div>
 
+      {showHint && <EmptyHint text={hint} />}
       <LoadingOverlay />
     </div>
   )

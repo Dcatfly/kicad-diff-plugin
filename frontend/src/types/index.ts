@@ -8,6 +8,8 @@ export type FileType = 'sch' | 'pcb'
 
 export type Locale = 'zh' | 'en'
 
+export type SidebarTab = 'pcb' | 'sch'
+
 export interface Commit {
   ref: string
   short_hash: string
@@ -34,11 +36,17 @@ export interface ExportFile {
   svg: string
 }
 
+export interface PcbLayerFile {
+  layer: string
+  svg: string
+}
+
 export interface ExportResult {
   status: 'ok' | 'error'
   ref: string
   cached: boolean
   files: ExportFile[]
+  pcb_layers?: Record<string, PcbLayerFile[]>
   message?: string
 }
 
@@ -48,6 +56,14 @@ export interface FilePair {
   oldSvg: string | null
   newSvg: string | null
   status: FileStatus
+  hasChanges: boolean | null
+}
+
+export interface LayerPair {
+  layer: string
+  pcbName: string
+  oldSvg: string | null
+  newSvg: string | null
   hasChanges: boolean | null
 }
 
