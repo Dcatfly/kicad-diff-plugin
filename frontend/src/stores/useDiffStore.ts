@@ -10,8 +10,12 @@ import type {
   FilePair,
   LayerPair,
   ExportResult,
+  ExportStatus,
 } from '../types'
 import { fetchVersions, exportVersion } from '../lib/api'
+import {
+  DEFAULT_ZOOM, DEFAULT_FADE, DEFAULT_THRESH, DEFAULT_OVERLAY, DEFAULT_BG_COLOR,
+} from '../lib/constants'
 import { buildFilePairs, buildLayerPairs } from '../lib/filePairing'
 import { translate } from '../lib/i18n'
 
@@ -59,7 +63,7 @@ interface DiffState {
   locale: Locale
   loading: boolean
   loadingText: string
-  exportStatus: string
+  exportStatus: ExportStatus
   comparing: boolean
 
   // Actions
@@ -74,7 +78,7 @@ interface DiffState {
   setNewRef: (ref: string) => void
   toggleLocale: () => void
   setLoading: (loading: boolean, text?: string) => void
-  setExportStatus: (status: string) => void
+  setExportStatus: (status: ExportStatus) => void
   initVersions: () => Promise<void>
   compare: () => Promise<void>
 }
@@ -86,11 +90,11 @@ export const useDiffStore = create<DiffState>((set, get) => ({
   // View defaults
   viewMode: 'diff',
   rawMode: false,
-  zoom: 100,
-  fade: 85,
-  thresh: 20,
-  overlay: 50,
-  bgColor: '#ffffff',
+  zoom: DEFAULT_ZOOM,
+  fade: DEFAULT_FADE,
+  thresh: DEFAULT_THRESH,
+  overlay: DEFAULT_OVERLAY,
+  bgColor: DEFAULT_BG_COLOR,
 
   // Sidebar
   sidebarTab: 'pcb',
@@ -184,7 +188,7 @@ export const useDiffStore = create<DiffState>((set, get) => ({
   locale: detectInitialLocale(),
   loading: true,
   loadingText: '',
-  exportStatus: '',
+  exportStatus: { key: '' },
   comparing: false,
 
   // Simple setters
@@ -272,7 +276,7 @@ export const useDiffStore = create<DiffState>((set, get) => ({
 
       if (oldResult.status !== 'ok' || newResult.status !== 'ok') {
         set({
-          exportStatus: t('exportFailed'),
+          exportStatus: { key: 'exportFailed' },
           loading: false,
           comparing: false,
         })
@@ -304,16 +308,13 @@ export const useDiffStore = create<DiffState>((set, get) => ({
           pcbLayerPairs: {},
           selectedPcbLayers: [],
           sidebarTab: 'sch',
-          exportStatus: t('noKicadFiles'),
+          exportStatus: { key: 'noKicadFiles' },
           loading: false,
           comparing: false,
           _userHasInteracted: false,
         })
         return
       }
-
-      const oldCached = oldResult.cached ? ` ${t('cached')}` : ''
-      const newCached = newResult.cached ? ` ${t('cached')}` : ''
 
       set({
         // Schematics
@@ -333,14 +334,14 @@ export const useDiffStore = create<DiffState>((set, get) => ({
         // Reset smart default tracking
         _userHasInteracted: false,
 
-        exportStatus: `${t('ready')}${oldCached}${newCached}`,
+        exportStatus: { key: 'ready', oldCached: oldResult.cached, newCached: newResult.cached },
         loading: false,
         comparing: false,
       })
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)
       set({
-        exportStatus: `${t('exportError')}: ${msg}`,
+        exportStatus: { key: 'exportError', message: msg },
         loading: false,
         comparing: false,
       })

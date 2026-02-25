@@ -13,9 +13,11 @@ import {
   renderSideRaw,
   applyZoom,
   renderDiffViewport,
+  renderOverlayViewport,
   renderSideAnnotatedViewport,
 } from '../lib/renderer'
 import { usePanZoom, type PendingScroll } from './usePanZoom'
+import { HI_RES_DEBOUNCE_MS } from '../lib/constants'
 
 export interface HiResRefs {
   hiResRef: React.RefObject<HTMLCanvasElement | null>
@@ -124,12 +126,12 @@ export function useCanvas(
       } else if (state.viewMode === 'overlay' && hiResRef.current) {
         hiResRef.current.style.left = (scrollEl.scrollLeft + offsetX) + 'px'
         hiResRef.current.style.top = (scrollEl.scrollTop + offsetY) + 'px'
-        const ctx = hiResRef.current.getContext('2d')!
-        renderOverlay(
-          hiResRef.current, ctx,
+        renderOverlayViewport(
+          hiResRef.current,
           images.imgOld, images.imgNew,
-          state.overlay, state.bgColor,
-          viewport,
+          state.overlay, state.thresh,
+          cx0, cy0, cw, ch, cssW, cssH,
+          state.bgColor,
         )
         showHiRes(hiResRef)
       } else if (state.viewMode === 'side' && hiResLRef.current && hiResRRef.current) {
@@ -157,7 +159,7 @@ export function useCanvas(
         showHiRes(hiResLRef)
         showHiRes(hiResRRef)
       }
-    }, 150)
+    }, HI_RES_DEBOUNCE_MS)
   }, [hideHiRes, showHiRes, leftPanelRef, containerRef, rightPanelRef])
 
   // ─── Content effect: loads images, renders at native resolution ───
@@ -219,9 +221,9 @@ export function useCanvas(
         } else if (viewMode === 'overlay') {
           const cvs = canvasRef?.current
           if (!cvs) return
-          const ctx = cvs.getContext('2d')
+          const ctx = cvs.getContext('2d', { willReadFrequently: true })
           if (!ctx) return
-          dims = renderOverlay(cvs, ctx, imgOld, imgNew, overlay, bgColor)
+          dims = renderOverlay(cvs, ctx, imgOld, imgNew, overlay, thresh, bgColor)
         } else if (viewMode === 'side') {
           const cvsL = canvasLRef?.current
           const cvsR = canvasRRef?.current

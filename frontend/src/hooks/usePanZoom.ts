@@ -2,6 +2,11 @@
 
 import { useEffect, useRef } from 'react'
 import { useDiffStore } from '../stores/useDiffStore'
+import {
+  ZOOM_MIN, ZOOM_MAX,
+  ZOOM_STEP_SMALL, ZOOM_STEP_MEDIUM, ZOOM_STEP_LARGE,
+  ZOOM_TIER_MEDIUM, ZOOM_TIER_LARGE,
+} from '../lib/constants'
 
 export interface PendingScroll {
   targets: HTMLElement[]
@@ -30,9 +35,9 @@ export function usePanZoom(
       const currentZoom = state.zoom
       const mode = state.viewMode
 
-      const step = currentZoom < 100 ? 10 : currentZoom < 300 ? 20 : 50
+      const step = currentZoom < ZOOM_TIER_MEDIUM ? ZOOM_STEP_SMALL : currentZoom < ZOOM_TIER_LARGE ? ZOOM_STEP_MEDIUM : ZOOM_STEP_LARGE
       const delta = e.deltaY > 0 ? -step : step
-      const newZoom = Math.max(10, Math.min(800, currentZoom + delta))
+      const newZoom = Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, currentZoom + delta))
       if (newZoom === currentZoom) return
 
       if (mode === 'side' && leftPanelRef?.current && rightPanelRef?.current) {

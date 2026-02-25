@@ -81,8 +81,13 @@ export default function Header() {
       </button>
 
       {/* Status */}
-      {exportStatus && (
-        <span className="text-text-secondary text-xs">{exportStatus}</span>
+      {exportStatus.key && (
+        <span className="text-text-secondary text-xs">
+          {t(exportStatus.key)}
+          {exportStatus.key === 'exportError' && exportStatus.message ? `: ${exportStatus.message}` : ''}
+          {exportStatus.oldCached ? ` ${t('cached')}` : ''}
+          {exportStatus.newCached ? ` ${t('cached')}` : ''}
+        </span>
       )}
 
       <div className="flex-1" />

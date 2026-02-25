@@ -1,6 +1,7 @@
 import { useDiffStore } from '../stores/useDiffStore'
 import { useTranslation } from '../lib/i18n'
 import Slider from './Slider'
+import { ZOOM_MIN, ZOOM_MAX } from '../lib/constants'
 import type { ViewMode } from '../types'
 
 export default function Toolbar() {
@@ -22,7 +23,8 @@ export default function Toolbar() {
 
   const isSide = viewMode === 'side'
   const isOverlay = viewMode === 'overlay'
-  const showFadeThresh = !isOverlay && !(isSide && rawMode)
+  const showFade = !isOverlay && !(isSide && rawMode)
+  const showThresh = !(isSide && rawMode)
   const showOverlay = isOverlay
 
   const modes: { mode: ViewMode; label: string }[] = [
@@ -79,18 +81,19 @@ export default function Toolbar() {
       </label>
 
       {/* Sliders */}
-      {showFadeThresh && (
-        <>
-          <Slider label={t('bgFade')} value={fade} min={0} max={100} suffix="%" onChange={setFade} />
-          <Slider label={t('noiseFilter')} value={thresh} min={1} max={80} onChange={setThresh} />
-        </>
+      {showFade && (
+        <Slider label={t('bgFade')} value={fade} min={0} max={100} suffix="%" onChange={setFade} />
+      )}
+
+      {showThresh && (
+        <Slider label={t('noiseFilter')} value={thresh} min={1} max={80} onChange={setThresh} />
       )}
 
       {showOverlay && (
-        <Slider label={t('newOpacity')} value={overlay} min={0} max={100} suffix="%" onChange={setOverlay} />
+        <Slider label={t('opacity')} value={overlay} min={0} max={100} suffix="%" onChange={setOverlay} />
       )}
 
-      <Slider label={t('zoom')} value={zoom} min={10} max={800} suffix="%" onChange={setZoom} />
+      <Slider label={t('zoom')} value={zoom} min={ZOOM_MIN} max={ZOOM_MAX} suffix="%" onChange={setZoom} />
     </div>
   )
 }

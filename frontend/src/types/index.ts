@@ -70,3 +70,10 @@ export interface LayerPair {
 export interface VersionMap {
   [ref: string]: Commit & { is_working?: boolean }
 }
+
+export interface ExportStatus {
+  key: string // '' | 'ready' | 'exportFailed' | 'exportError' | 'noKicadFiles'
+  message?: string
+  oldCached?: boolean
+  newCached?: boolean
+}

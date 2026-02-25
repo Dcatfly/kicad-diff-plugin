@@ -1,5 +1,7 @@
 // ─── Pure rendering functions: pixel-level diff, overlay, side-by-side ───
 
+import { FADE_BG, CHANGE_DETECT_SAMPLE_SIZE } from './constants'
+
 export const DPR = window.devicePixelRatio || 1
 
 // ─── Types ───
@@ -173,7 +175,7 @@ function applyDiffColors(
   const od = out.data
   const fadeAlpha = 1 - fade / 100
   const [bgR, bgG, bgB] = parseBgColor(bgColor)
-  const fadeBgR = 15, fadeBgG = 15, fadeBgB = 35
+  const [fadeBgR, fadeBgG, fadeBgB] = FADE_BG
 
   for (let p = 0; p < pw * ph; p++) {
     const i = p << 2
@@ -224,7 +226,7 @@ function applySideAnnotatedColors(
 ): ImageData {
   const fadeAlpha = 1 - fade / 100
   const [bgR, bgG, bgB] = parseBgColor(bgColor)
-  const fadeBgR = 15, fadeBgG = 15, fadeBgB = 35
+  const [fadeBgR, fadeBgG, fadeBgB] = FADE_BG
 
   const outImg = new ImageData(pw, ph)
   const od = outImg.data
@@ -297,6 +299,48 @@ export function renderDiff(
   return { natW, natH }
 }
 
+// ─── Overlay pixel blending ───
+// Identical pixels are shown as-is; different pixels blend old*(1-t) + new*t.
+
+function applyOverlayColors(
+  oldP: Uint8ClampedArray,
+  newP: Uint8ClampedArray,
+  mask: Uint8Array,
+  overlay: number,
+  pw: number,
+  ph: number,
+  bgColor: string,
+): ImageData {
+  const out = new ImageData(pw, ph)
+  const od = out.data
+  const t = overlay / 100
+  const [bgR, bgG, bgB] = parseBgColor(bgColor)
+
+  for (let p = 0; p < pw * ph; p++) {
+    const i = p << 2
+    const aO = oldP[i + 3]
+    const aN = newP[i + 3]
+    const rO = aO === 0 ? bgR : oldP[i]
+    const gO = aO === 0 ? bgG : oldP[i + 1]
+    const bO = aO === 0 ? bgB : oldP[i + 2]
+    const rN = aN === 0 ? bgR : newP[i]
+    const gN = aN === 0 ? bgG : newP[i + 1]
+    const bN = aN === 0 ? bgB : newP[i + 2]
+
+    if (mask[p]) {
+      od[i]     = Math.round(rO * (1 - t) + rN * t)
+      od[i + 1] = Math.round(gO * (1 - t) + gN * t)
+      od[i + 2] = Math.round(bO * (1 - t) + bN * t)
+    } else {
+      od[i]     = rN
+      od[i + 1] = gN
+      od[i + 2] = bN
+    }
+    od[i + 3] = 255
+  }
+  return out
+}
+
 // ─── Overlay mode renderer (native resolution) ───
 
 export function renderOverlay(
@@ -305,36 +349,21 @@ export function renderOverlay(
   imgOld: ImageSource,
   imgNew: ImageSource,
   overlay: number,
+  thresh: number,
   bgColor: string,
-  viewport?: ViewportRegion,
 ): { natW: number; natH: number } {
   const { natW, natH } = getNaturalDimensions(imgOld, imgNew)
-  const vp = viewport
-  const drawW = vp ? vp.cssW : natW
-  const drawH = vp ? vp.cssH : natH
-  const pw = Math.round(drawW * DPR)
-  const ph = Math.round(drawH * DPR)
+  const pw = Math.round(natW * DPR)
+  const ph = Math.round(natH * DPR)
   setCanvasBacking(canvas, pw, ph)
-  if (vp) {
-    canvas.style.width = drawW + 'px'
-    canvas.style.height = drawH + 'px'
-  }
-  ctx.setTransform(DPR, 0, 0, DPR, 0, 0)
-  ctx.imageSmoothingEnabled = true
-  ctx.imageSmoothingQuality = 'high'
-  ctx.fillStyle = bgColor
-  ctx.fillRect(0, 0, drawW, drawH)
-  ctx.globalAlpha = 1
-  if (vp) {
-    drawAllRegion(ctx, imgOld, vp.srcX, vp.srcY, vp.srcW, vp.srcH, 0, 0, drawW, drawH)
-    ctx.globalAlpha = overlay / 100
-    drawAllRegion(ctx, imgNew, vp.srcX, vp.srcY, vp.srcW, vp.srcH, 0, 0, drawW, drawH)
-  } else {
-    drawAllFull(ctx, imgOld, natW, natH)
-    ctx.globalAlpha = overlay / 100
-    drawAllFull(ctx, imgNew, natW, natH)
-  }
-  ctx.globalAlpha = 1
+
+  const dOld = rasterize(imgOld, pw, ph)
+  const dNew = rasterize(imgNew, pw, ph)
+  const mask = buildDiffMask(dOld.data, dNew.data, pw * ph, thresh)
+  const out = applyOverlayColors(dOld.data, dNew.data, mask, overlay, pw, ph, bgColor)
+
+  ctx.setTransform(1, 0, 0, 1, 0, 0)
+  ctx.putImageData(out, 0, 0)
   return { natW, natH }
 }
 
@@ -447,6 +476,32 @@ export function renderDiffViewport(
   ctx.putImageData(out, 0, 0)
 }
 
+export function renderOverlayViewport(
+  hiResCanvas: HTMLCanvasElement,
+  imgOld: ImageSource,
+  imgNew: ImageSource,
+  overlay: number,
+  thresh: number,
+  srcX: number, srcY: number, srcW: number, srcH: number,
+  vpW: number, vpH: number,
+  bgColor: string,
+) {
+  const pw = Math.round(vpW * DPR)
+  const ph = Math.round(vpH * DPR)
+  setCanvasBacking(hiResCanvas, pw, ph)
+  hiResCanvas.style.width = vpW + 'px'
+  hiResCanvas.style.height = vpH + 'px'
+
+  const dOld = rasterizeRegion(imgOld, srcX, srcY, srcW, srcH, pw, ph)
+  const dNew = rasterizeRegion(imgNew, srcX, srcY, srcW, srcH, pw, ph)
+  const mask = buildDiffMask(dOld.data, dNew.data, pw * ph, thresh)
+  const out = applyOverlayColors(dOld.data, dNew.data, mask, overlay, pw, ph, bgColor)
+
+  const ctx = hiResCanvas.getContext('2d', { willReadFrequently: true })!
+  ctx.setTransform(1, 0, 0, 1, 0, 0)
+  ctx.putImageData(out, 0, 0)
+}
+
 export function renderSideAnnotatedViewport(
   hiResCanvasL: HTMLCanvasElement,
   hiResCanvasR: HTMLCanvasElement,
@@ -490,7 +545,7 @@ export function detectChanges(
   imgNew: CanvasImageSource,
   thresh: number,
 ): boolean {
-  const size = 400
+  const size = CHANGE_DETECT_SAMPLE_SIZE
   const w = size
   const baseW = Math.max(singleSourceWidth(imgOld), singleSourceWidth(imgNew)) || 1
   const baseH = Math.max(singleSourceHeight(imgOld), singleSourceHeight(imgNew)) || 1
