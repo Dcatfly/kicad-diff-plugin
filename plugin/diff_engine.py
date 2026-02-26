@@ -5,6 +5,7 @@ Extracted from kicad_diff/server.py for use in the plugin server.
 from __future__ import annotations
 
 import io
+import logging
 import os
 import re
 import shutil
@@ -13,6 +14,15 @@ import sys
 import tarfile
 import tempfile
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
+
+# On Windows, prevent subprocess calls from flashing a console window.
+_SUBPROCESS_KWARGS: dict = (
+    {"creationflags": getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)}
+    if sys.platform == "win32"
+    else {}
+)
 
 PCB_COMMON_LAYERS = "Edge.Cuts"
 
@@ -41,12 +51,16 @@ def find_kicad_cli() -> str:
         candidates.append("/usr/bin/kicad-cli")
         candidates.append("/usr/local/bin/kicad-cli")
 
+    logger.debug("kicad-cli search candidates: %s", candidates)
+
     for path in candidates:
         if os.path.isfile(path) and os.access(path, os.X_OK):
+            logger.info("Found kicad-cli at candidate path: %s", path)
             return path
 
     found = shutil.which("kicad-cli")
     if found:
+        logger.info("Found kicad-cli via PATH: %s", found)
         return found
     raise FileNotFoundError("Cannot find kicad-cli. Please ensure KiCad is installed.")
 
@@ -55,13 +69,38 @@ def find_kicad_cli() -> str:
 # Git helpers
 # ---------------------------------------------------------------------------
 
+def _normalize_git_path(raw: str) -> str:
+    """Normalize a path returned by Git on Windows.
+
+    Git for Windows (MSYS2) may return POSIX-style paths such as
+    ``/c/Users/...`` instead of ``C:/Users/...``.  Convert them so that
+    :class:`pathlib.Path` produces a valid Windows path.
+    """
+    if (
+        sys.platform == "win32"
+        and len(raw) >= 3
+        and raw[0] == "/"
+        and raw[1].isalpha()
+        and raw[2] == "/"
+    ):
+        normalized = raw[1].upper() + ":" + raw[2:]
+        logger.debug("Normalized git path: %s -> %s", raw, normalized)
+        return normalized
+    return raw
+
+
 def find_repo_root(board_dir: str) -> Path:
     """Find the git repository root from board_dir."""
+    logger.debug("find_repo_root: board_dir=%s", board_dir)
     result = subprocess.run(
         ["git", "rev-parse", "--show-toplevel"],
-        capture_output=True, text=True, check=True, cwd=board_dir,
+        capture_output=True, encoding="utf-8", check=True, cwd=board_dir,
+        **_SUBPROCESS_KWARGS,
     )
-    return Path(result.stdout.strip())
+    raw_path = result.stdout.strip()
+    repo_root = Path(_normalize_git_path(raw_path))
+    logger.info("Resolved repo root: %s (raw git output: %s)", repo_root, raw_path)
+    return repo_root
 
 
 def _parse_commit_line(line: str) -> dict | None:
@@ -106,31 +145,39 @@ def get_versions(repo_root: Path) -> dict:
     try:
         result = subprocess.run(
             ["git", "branch", "--show-current"],
-            capture_output=True, text=True, check=True, cwd=repo_root,
+            capture_output=True, encoding="utf-8", check=True, cwd=repo_root,
+            **_SUBPROCESS_KWARGS,
         )
         current_branch = result.stdout.strip()
-    except subprocess.CalledProcessError:
-        pass
+        logger.debug("Current branch: %s", current_branch)
+    except subprocess.CalledProcessError as e:
+        logger.warning("Failed to get current branch: %s", e.stderr.strip() if e.stderr else e)
 
     try:
         result = subprocess.run(
             ["git", "branch", "--format=%(refname:short)"],
-            capture_output=True, text=True, check=True, cwd=repo_root,
+            capture_output=True, encoding="utf-8", check=True, cwd=repo_root,
+            **_SUBPROCESS_KWARGS,
         )
         local_branches = [b.strip() for b in result.stdout.strip().splitlines() if b.strip()]
-    except subprocess.CalledProcessError:
+        logger.debug("Local branches: %s", local_branches)
+    except subprocess.CalledProcessError as e:
+        logger.warning("Failed to list local branches: %s", e.stderr.strip() if e.stderr else e)
         local_branches = []
 
     try:
         result = subprocess.run(
             ["git", "branch", "-r", "--format=%(refname:short)"],
-            capture_output=True, text=True, check=True, cwd=repo_root,
+            capture_output=True, encoding="utf-8", check=True, cwd=repo_root,
+            **_SUBPROCESS_KWARGS,
         )
         remote_branches = [
             b.strip() for b in result.stdout.strip().splitlines()
             if b.strip() and not b.strip().endswith("/HEAD")
         ]
-    except subprocess.CalledProcessError:
+        logger.debug("Remote branches: %s", remote_branches)
+    except subprocess.CalledProcessError as e:
+        logger.warning("Failed to list remote branches: %s", e.stderr.strip() if e.stderr else e)
         remote_branches = []
 
     ordered: list[str] = []
@@ -150,9 +197,11 @@ def get_versions(repo_root: Path) -> dict:
             result = subprocess.run(
                 ["git", "log", branch, "--format=%H|%h|%s|%D|%ar", "--",
                  "*.kicad_sch", "*.kicad_pcb"],
-                capture_output=True, text=True, check=True, cwd=repo_root,
+                capture_output=True, encoding="utf-8", check=True, cwd=repo_root,
+                **_SUBPROCESS_KWARGS,
             )
-        except subprocess.CalledProcessError:
+        except subprocess.CalledProcessError as e:
+            logger.warning("Failed to get log for branch %s: %s", branch, e.stderr.strip() if e.stderr else e)
             continue
 
         commits = []
@@ -193,8 +242,10 @@ def export_sch_svg(kicad_cli: str, input_path: str, output_dir: str) -> None:
         str(output_dir),
         str(input_path),
     ]
+    logger.info("Exporting schematic SVG: %s", input_path)
+    logger.debug("kicad-cli command: %s", cmd)
     try:
-        subprocess.run(cmd, capture_output=True, check=True)
+        subprocess.run(cmd, capture_output=True, check=True, **_SUBPROCESS_KWARGS)
         return
     except subprocess.CalledProcessError as err:
         # Older KiCad versions may not support this flag.
@@ -205,7 +256,9 @@ def export_sch_svg(kicad_cli: str, input_path: str, output_dir: str) -> None:
                 return v.decode(errors="ignore")
             return v
 
-        output = f"{_text(err.stdout)}\n{_text(err.stderr)}".lower()
+        stdout_text = _text(err.stdout)
+        stderr_text = _text(err.stderr)
+        output = f"{stdout_text}\n{stderr_text}".lower()
         unsupported_flag = (
             "no-background-color" in output and (
                 "unknown option" in output
@@ -214,11 +267,13 @@ def export_sch_svg(kicad_cli: str, input_path: str, output_dir: str) -> None:
             )
         )
         if not unsupported_flag:
+            logger.error("kicad-cli sch export failed: stdout=%s stderr=%s", stdout_text, stderr_text)
             raise
+        logger.info("Retrying sch export without --no-background-color (unsupported by this KiCad version)")
 
     subprocess.run(
         [kicad_cli, "sch", "export", "svg", "-o", str(output_dir), str(input_path)],
-        capture_output=True, check=True,
+        capture_output=True, check=True, **_SUBPROCESS_KWARGS,
     )
 
 
@@ -253,30 +308,46 @@ def export_pcb_svg_layers(
     """Export PCB layers as individual SVGs using --mode-multi."""
     layers = parse_pcb_layers(input_path)
     if not layers:
+        logger.warning("No layers found in PCB file: %s", input_path)
         return
 
     pcb_dir = os.path.join(output_dir, f"pcb-layers-{pcb_name}")
     os.makedirs(pcb_dir, exist_ok=True)
 
-    subprocess.run(
-        [kicad_cli, "pcb", "export", "svg",
-         "-o", pcb_dir,
-         "--layers", ",".join(layers),
-         "--common-layers", PCB_COMMON_LAYERS,
-         "--mode-multi",
-         "--page-size-mode", "0",
-         "--sketch-pads-on-fab-layers",
-         str(input_path)],
-        capture_output=True, check=True,
-    )
+    cmd = [
+        kicad_cli, "pcb", "export", "svg",
+        "-o", pcb_dir,
+        "--layers", ",".join(layers),
+        "--common-layers", PCB_COMMON_LAYERS,
+        "--mode-multi",
+        "--page-size-mode", "0",
+        "--sketch-pads-on-fab-layers",
+        str(input_path),
+    ]
+    logger.info("Exporting PCB layers SVG: %s (%d layers)", input_path, len(layers))
+    logger.debug("kicad-cli command: %s", cmd)
+    try:
+        subprocess.run(cmd, capture_output=True, check=True, **_SUBPROCESS_KWARGS)
+    except subprocess.CalledProcessError as e:
+        stderr = e.stderr.decode(errors="ignore") if isinstance(e.stderr, bytes) else (e.stderr or "")
+        stdout = e.stdout.decode(errors="ignore") if isinstance(e.stdout, bytes) else (e.stdout or "")
+        logger.error("kicad-cli pcb export failed: stdout=%s stderr=%s", stdout, stderr)
+        raise
 
 
 def extract_project_at_ref(ref: str, dest_dir: str, repo_root: Path) -> None:
     """Extract the entire project tree at a git ref using Python tarfile."""
-    result = subprocess.run(
-        ["git", "archive", ref],
-        capture_output=True, check=True, cwd=repo_root,
-    )
+    logger.info("Extracting project at ref=%s to %s", ref, dest_dir)
+    try:
+        result = subprocess.run(
+            ["git", "archive", ref],
+            capture_output=True, check=True, cwd=repo_root,
+            **_SUBPROCESS_KWARGS,
+        )
+    except subprocess.CalledProcessError as e:
+        stderr = e.stderr.decode(errors="ignore") if isinstance(e.stderr, bytes) else (e.stderr or "")
+        logger.error("git archive failed for ref=%s: %s", ref, stderr)
+        raise
     with tarfile.open(fileobj=io.BytesIO(result.stdout), mode="r:") as tar:
         tar.extractall(path=str(dest_dir))
 
@@ -298,7 +369,10 @@ def export_for_ref(
 
     complete_marker = out_dir / ".complete"
     if not is_working and complete_marker.exists():
+        logger.info("Cache hit for ref=%s", ref)
         return build_structured_result(out_dir, output_dir), True
+
+    logger.info("Exporting ref=%s (cache miss)", ref)
 
     # Clean stale working directory to avoid ghost files from deleted sources
     if is_working and out_dir.exists():
@@ -327,6 +401,7 @@ def export_for_ref(
                     continue
                 kicad_files.append(str(rel))
         kicad_files.sort()
+        logger.info("Found %d KiCad files for ref=%s: %s", len(kicad_files), ref, kicad_files)
 
         for filepath in kicad_files:
             name = Path(filepath).stem
@@ -344,7 +419,7 @@ def export_for_ref(
                         kicad_cli, str(src_path), str(out_dir), name,
                     )
             except subprocess.CalledProcessError as e:
-                print(f"[kicad-diff] Warning: export failed for {filepath}: {e}")
+                logger.warning("Export failed for %s: %s", filepath, e)
                 continue
 
         if not is_working:
@@ -410,6 +485,7 @@ def resolve_ref(ref: str, repo_root: Path) -> str:
         raise ValueError(f"Invalid ref: {ref}")
     result = subprocess.run(
         ["git", "rev-parse", ref],
-        capture_output=True, text=True, check=True, cwd=repo_root,
+        capture_output=True, encoding="utf-8", check=True, cwd=repo_root,
+        **_SUBPROCESS_KWARGS,
     )
     return result.stdout.strip()

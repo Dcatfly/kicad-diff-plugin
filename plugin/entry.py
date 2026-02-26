@@ -14,7 +14,9 @@ import webbrowser
 from pathlib import Path
 from typing import Any
 
-HOST = os.environ.get("KICAD_DIFF_PLUGIN_HOST", "127.0.0.1")
+BIND_HOST = os.environ.get("KICAD_DIFF_PLUGIN_HOST", "0.0.0.0")
+# 0.0.0.0 binds all interfaces but can't be used as a connect target.
+CONNECT_HOST = "127.0.0.1" if BIND_HOST == "0.0.0.0" else BIND_HOST
 STARTUP_TIMEOUT_SECONDS = 4.0
 HEALTHCHECK_INTERVAL_SECONDS = 0.2
 SHUTDOWN_TIMEOUT_SECONDS = 2.0
@@ -49,16 +51,21 @@ def _log_file(port: int) -> Path:
 
 # ── URL helpers ───────────────────────────────────────────────────────
 
+def _local_url(port: int, path: str = "/") -> str:
+    """Build a URL using the connectable host (for health-checks and browser)."""
+    return f"http://{CONNECT_HOST}:{port}{path}"
+
+
 def _healthcheck_url(port: int) -> str:
-    return f"http://{HOST}:{port}/api/health"
+    return _local_url(port, "/api/health")
 
 
 def _dashboard_url(port: int) -> str:
-    return f"http://{HOST}:{port}/"
+    return _local_url(port)
 
 
 def _shutdown_url(port: int) -> str:
-    return f"http://{HOST}:{port}/api/shutdown"
+    return _local_url(port, "/api/shutdown")
 
 
 # ── Server probing ───────────────────────────────────────────────────
@@ -122,15 +129,16 @@ def _terminate_pid(pid: int) -> None:
 
 
 def _command_for_pid(pid: int) -> str:
+    """Return a descriptive command string for *pid* (used for stale-server detection)."""
     if pid <= 0:
         return ""
     try:
-        output = subprocess.check_output(
-            ["ps", "-p", str(pid), "-o", "command="], text=True
-        )
+        import psutil
+        proc = psutil.Process(pid)
+        cmdline = proc.cmdline()
+        return " ".join(cmdline) if cmdline else proc.name()
     except Exception:
         return ""
-    return output.strip()
 
 
 def _kill_pid(pid: int, sig: int) -> bool:
@@ -204,6 +212,49 @@ def _wait_until_server_down(port: int, timeout_seconds: float) -> bool:
     return not _is_server_up(port)
 
 
+# ── Log file management ───────────────────────────────────────────────
+
+_LOG_MAX_BYTES = 2 * 1024 * 1024        # 2 MB
+_LOG_KEEP_BYTES = 500 * 1024             # 500 KB
+
+
+def _write_entry_log(log_path: Path, message: str) -> None:
+    """Append a timestamped entry.py message to the server log file."""
+    from datetime import datetime
+    ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S,%f")[:-3]
+    try:
+        with log_path.open("a", encoding="utf-8") as f:
+            f.write(f"{ts} [INFO] entry.py - {message}\n")
+    except Exception:
+        pass
+
+
+def _truncate_log_if_needed(
+    log_path: Path,
+    max_bytes: int = _LOG_MAX_BYTES,
+    keep_bytes: int = _LOG_KEEP_BYTES,
+) -> None:
+    """Truncate *log_path* when it exceeds *max_bytes*, keeping the last *keep_bytes*."""
+    try:
+        if not log_path.exists():
+            return
+        size = log_path.stat().st_size
+        if size <= max_bytes:
+            return
+        actual_keep = min(keep_bytes, size - 1)
+        with log_path.open("rb") as f:
+            f.seek(-actual_keep, 2)  # seek from end
+            # Advance to the next full line to avoid a partial first line
+            f.readline()
+            tail = f.read()
+        tmp = log_path.with_suffix(".tmp")
+        tmp.write_bytes(tail)
+        os.replace(tmp, log_path)
+        print(f"[kicad-diff] Truncated log {log_path.name}: {size} -> {len(tail)} bytes")
+    except Exception as e:
+        print(f"[kicad-diff] Failed to truncate log: {e}")
+
+
 # ── Server lifecycle ─────────────────────────────────────────────────
 
 def _restart_server(port: int, board_dir: str) -> bool:
@@ -244,18 +295,24 @@ def _start_server(port: int, board_dir: str) -> bool:
         print(f"Server script not found: {SERVER_SCRIPT}")
         return False
 
-    print(f"[kicad-diff] Board dir: {board_dir}")
-    print(f"[kicad-diff] Port: {port}")
+    log = _log_file(port)
+    log.parent.mkdir(parents=True, exist_ok=True)
+    _truncate_log_if_needed(log)
 
-    kicad_pid = _get_kicad_pid()
-    print(f"[kicad-diff] KiCad PID for watchdog: {kicad_pid}")
+    _write_entry_log(log, f"Board dir: {board_dir}")
+    _write_entry_log(log, f"Port: {port}")
+    _write_entry_log(log, f"Python: {sys.executable}")
+    _write_entry_log(log, f"Platform: {sys.platform}, os.name={os.name}")
+
+    kicad_pid = _get_kicad_pid(log)
+    _write_entry_log(log, f"KiCad PID for watchdog: {kicad_pid}")
 
     pid_file = _pid_file(port)
     command = [
         sys.executable,
         str(SERVER_SCRIPT),
         "--host",
-        HOST,
+        BIND_HOST,
         "--port",
         str(port),
         "--pid-file",
@@ -268,9 +325,8 @@ def _start_server(port: int, board_dir: str) -> bool:
 
     environment = os.environ.copy()
     environment.setdefault("PYTHONUNBUFFERED", "1")
+    environment.setdefault("PYTHONIOENCODING", "utf-8")
 
-    log = _log_file(port)
-    log.parent.mkdir(parents=True, exist_ok=True)
     with log.open("ab") as log_fp:
         try:
             proc = subprocess.Popen(
@@ -473,28 +529,34 @@ def _get_board_dir_from_kicad() -> str | None:
         return None
 
 
-def _get_kicad_pid() -> int | None:
-    """Try to find KiCad's process ID.
+def _get_kicad_pid(log_path: Path | None = None) -> int | None:
+    """Try to find KiCad's process ID by walking up the process tree.
 
-    When entry.py is spawned by KiCad's plugin system, KiCad is typically
-    the parent process.  We walk up the process tree to find a process
-    whose name looks like "kicad".
+    Uses *psutil* for reliable cross-platform process introspection.
     """
-    pid = os.getppid()
-    for _ in range(3):
-        if pid <= 1:
-            return None
-        cmd = _command_for_pid(pid)
-        cmd_lower = cmd.lower()
-        if "kicad" in cmd_lower and "kicad-cli" not in cmd_lower:
-            return pid
+    import psutil
+
+    def _log(msg: str) -> None:
+        if log_path is not None:
+            _write_entry_log(log_path, msg)
+
+    try:
+        ancestors = psutil.Process().parents()
+    except (psutil.NoSuchProcess, psutil.AccessDenied) as exc:
+        _log(f"Failed to get process ancestors: {exc}")
+        return None
+
+    _log(f"Process ancestors: {[(p.pid, p.name()) for p in ancestors]}")
+    for proc in ancestors:
         try:
-            output = subprocess.check_output(
-                ["ps", "-p", str(pid), "-o", "ppid="], text=True,
-            )
-            pid = int(output.strip())
-        except Exception:
-            break
+            name_lower = proc.name().lower()
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            continue
+        if "kicad" in name_lower and "kicad-cli" not in name_lower:
+            _log(f"Found KiCad at PID {proc.pid}")
+            return proc.pid
+
+    _log("KiCad PID not found")
     return None
 
 

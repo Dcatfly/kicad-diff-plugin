@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 import mimetypes
 import os
 import shutil
@@ -19,6 +20,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 from urllib.parse import unquote, urlparse
+
+logger = logging.getLogger(__name__)
 
 from diff_engine import (
     export_for_ref,
@@ -99,7 +102,10 @@ class DiffRequestHandler(BaseHTTPRequestHandler):
             self.send_error(HTTPStatus.NOT_FOUND)
 
     def log_message(self, format: str, *args: Any) -> None:
-        print(f"[kicad-diff] {format % args}")
+        logger.info(format, *args)
+
+    def log_error(self, format: str, *args: Any) -> None:
+        logger.warning(format, *args)
 
     # ── API handlers ──
 
@@ -108,7 +114,7 @@ class DiffRequestHandler(BaseHTTPRequestHandler):
             versions = get_versions(self._repo_root)
             self._send_json(versions)
         except Exception as e:
-            print(f"[kicad-diff] Error in /api/versions: {e}")
+            logger.exception("Error in /api/versions")
             self._send_json({"status": "error", "message": str(e)}, 500)
 
     def _handle_export(self) -> None:
@@ -155,7 +161,7 @@ class DiffRequestHandler(BaseHTTPRequestHandler):
                 "pcb_layers": result["pcb_layers"],
             })
         except Exception as e:
-            print(f"[kicad-diff] Error in /api/export for ref={ref}: {e}")
+            logger.exception("Error in /api/export for ref=%s", ref)
             self._send_json({"status": "error", "message": str(e)}, 500)
 
     # ── File serving ──
@@ -264,16 +270,8 @@ def _make_handler_class(
 
 def _is_process_alive(pid: int) -> bool:
     """Check whether a process with the given PID is still running."""
-    try:
-        os.kill(pid, 0)  # signal 0 = existence check, no signal sent
-        return True
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        # Process exists but we lack permission to signal it
-        return True
-    except OSError:
-        return False
+    import psutil
+    return psutil.pid_exists(pid)
 
 
 def _start_pid_watcher(
@@ -287,21 +285,21 @@ def _start_pid_watcher(
         while True:
             time.sleep(poll_interval)
             if not _is_process_alive(watch_pid):
-                print(
-                    f"[kicad-diff] Watched process {watch_pid} exited, "
-                    "shutting down server"
+                logger.info(
+                    "Watched process %d exited, shutting down server",
+                    watch_pid,
                 )
                 server.shutdown()
                 return
 
     t = threading.Thread(target=_watcher, daemon=True)
     t.start()
-    print(f"[kicad-diff] PID watcher started for PID {watch_pid}")
+    logger.info("PID watcher started for PID %d", watch_pid)
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="KiCad Diff web server")
-    parser.add_argument("--host", default="127.0.0.1", help="bind host")
+    parser.add_argument("--host", default="0.0.0.0", help="bind host")
     parser.add_argument("--port", default=18765, type=int, help="bind port")
     parser.add_argument("--pid-file", default="", help="optional pid file path")
     parser.add_argument(
@@ -319,6 +317,11 @@ def parse_args() -> argparse.Namespace:
 
 
 def main() -> int:
+    logging.basicConfig(
+        format="%(asctime)s [%(levelname)s] %(filename)s:%(funcName)s:%(lineno)d - %(message)s",
+        level=logging.INFO,
+    )
+
     args = parse_args()
     pid_file = Path(args.pid_file).resolve() if args.pid_file else None
     board_dir = args.board_dir or os.getcwd()
@@ -327,11 +330,11 @@ def main() -> int:
     kicad_cli = find_kicad_cli()
     output_dir = tempfile.mkdtemp(prefix="kicad-diff-")
 
-    print(f"[kicad-diff] Plugin dir: {PLUGIN_DIR}")
-    print(f"[kicad-diff] Repo root:  {repo_root}")
-    print(f"[kicad-diff] kicad-cli:  {kicad_cli}")
-    print(f"[kicad-diff] Output dir: {output_dir}")
-    print(f"[kicad-diff] Board dir:  {board_dir}")
+    logger.info("Plugin dir: %s", PLUGIN_DIR)
+    logger.info("Repo root:  %s", repo_root)
+    logger.info("kicad-cli:  %s", kicad_cli)
+    logger.info("Output dir: %s", output_dir)
+    logger.info("Board dir:  %s", board_dir)
 
     handler_class = _make_handler_class(repo_root, output_dir, kicad_cli)
     server = ThreadingHTTPServer((args.host, args.port), handler_class)
@@ -342,13 +345,15 @@ def main() -> int:
     # Start PID watcher for auto-shutdown when KiCad exits
     if args.watch_pid > 0:
         _start_pid_watcher(args.watch_pid, server)
+    else:
+        logger.warning("No --watch-pid provided; server will not auto-shutdown when KiCad exits")
 
-    print(f"[kicad-diff] Server listening at http://{args.host}:{args.port}")
+    logger.info("Server listening at http://%s:%d", args.host, args.port)
 
     try:
         server.serve_forever()
     except KeyboardInterrupt:
-        print("\n[kicad-diff] Server stopped.")
+        logger.info("Server stopped.")
     finally:
         server.server_close()
         shutil.rmtree(output_dir, ignore_errors=True)

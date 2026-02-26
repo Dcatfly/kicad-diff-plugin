@@ -18,7 +18,6 @@ PCM_PLUGIN_DIR = Path("plugins")
 EXCLUDED_FILE_NAMES = {
     ".DS_Store",
     ".gitkeep",
-    ".server.log",
     "metadata.json",
 }
 EXCLUDED_DIR_NAMES = {
@@ -26,6 +25,8 @@ EXCLUDED_DIR_NAMES = {
 }
 EXCLUDED_SUFFIXES = {
     ".pyc",
+    ".log",
+    ".pid",
 }
 
 
