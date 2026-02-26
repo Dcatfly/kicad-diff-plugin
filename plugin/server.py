@@ -35,6 +35,20 @@ PLUGIN_DIR = Path(__file__).resolve().parent
 WEB_DIR = PLUGIN_DIR / "web"
 
 
+def _read_plugin_version() -> str:
+    meta_path = PLUGIN_DIR / "metadata.json"
+    try:
+        with open(meta_path, encoding="utf-8") as f:
+            meta = json.load(f)
+        versions = meta.get("versions", [])
+        return versions[0]["version"] if versions else ""
+    except Exception:
+        return ""
+
+
+PLUGIN_VERSION = _read_plugin_version()
+
+
 def utc_now_iso() -> str:
     return datetime.now(tz=timezone.utc).isoformat()
 
@@ -112,6 +126,7 @@ class DiffRequestHandler(BaseHTTPRequestHandler):
     def _handle_versions(self) -> None:
         try:
             versions = get_versions(self._repo_root)
+            versions["plugin_version"] = PLUGIN_VERSION
             self._send_json(versions)
         except Exception as e:
             logger.exception("Error in /api/versions")

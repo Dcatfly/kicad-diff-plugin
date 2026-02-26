@@ -54,6 +54,7 @@ interface DiffState {
   _userHasInteracted: boolean
 
   // Versions
+  pluginVersion: string
   versionData: VersionData | null
   versionMap: VersionMap
   oldRef: string
@@ -179,6 +180,7 @@ export const useDiffStore = create<DiffState>((set, get) => ({
   _userHasInteracted: false,
 
   // Versions
+  pluginVersion: '',
   versionData: null,
   versionMap: {},
   oldRef: '',
@@ -241,6 +243,7 @@ export const useDiffStore = create<DiffState>((set, get) => ({
       }
 
       set({
+        pluginVersion: data.plugin_version ?? '',
         versionData: data,
         versionMap: map,
         oldRef: defaultOld,

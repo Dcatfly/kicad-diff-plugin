@@ -2,6 +2,7 @@ import { useDiffStore } from '../stores/useDiffStore'
 import { useTranslation, translate } from '../lib/i18n'
 
 export default function Header() {
+  const pluginVersion = useDiffStore((s) => s.pluginVersion)
   const versionData = useDiffStore((s) => s.versionData)
   const oldRef = useDiffStore((s) => s.oldRef)
   const newRef = useDiffStore((s) => s.newRef)
@@ -44,6 +45,9 @@ export default function Header() {
       <h1 className="text-sm font-bold text-text-primary whitespace-nowrap">
         KiCad Diff
       </h1>
+      {pluginVersion && (
+        <span className="text-[10px] text-text-secondary">v{pluginVersion}</span>
+      )}
 
       {/* Old version */}
       <label className="flex items-center gap-1.5">

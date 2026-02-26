@@ -27,6 +27,7 @@ export interface BranchGroup {
 export interface VersionData {
   current_branch: string
   groups: BranchGroup[]
+  plugin_version?: string
 }
 
 export interface ExportFile {
