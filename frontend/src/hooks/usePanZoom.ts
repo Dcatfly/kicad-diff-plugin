@@ -14,6 +14,18 @@ export interface PendingScroll {
   scrollTop: number
 }
 
+/** Consume and apply a pending scroll, then null-out the ref. */
+export function consumePendingScroll(ref: React.MutableRefObject<PendingScroll | null>) {
+  const pending = ref.current
+  if (!pending) return
+  ref.current = null
+  const { targets, scrollLeft, scrollTop } = pending
+  for (const el of targets) {
+    el.scrollLeft = scrollLeft
+    el.scrollTop = scrollTop
+  }
+}
+
 export function usePanZoom(
   containerRef: React.RefObject<HTMLElement | null>,
   pendingScrollRef: React.RefObject<PendingScroll | null>,

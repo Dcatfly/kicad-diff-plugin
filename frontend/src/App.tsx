@@ -1,7 +1,8 @@
-import { useEffect } from 'react'
+import { useEffect, useRef } from 'react'
 import { useDiffStore } from './stores/useDiffStore'
 import { loadImg } from './hooks/useImageLoader'
 import { detectChanges } from './lib/renderer'
+import { useDebounceScheduler, parallelMap } from './lib/scheduling'
 import Header from './components/Header'
 import Toolbar from './components/Toolbar'
 import Sidebar from './components/Sidebar'
@@ -34,76 +35,86 @@ function App() {
     init()
   }, [initVersions, compare])
 
-  // Detect changes for schematic files
-  useEffect(() => {
-    if (schematicKeys.length === 0) return
+  // ─── Debounced change detection ───
 
+  // Cancellation token for in-flight async detection work
+  const schCancelRef = useRef<() => void>(() => {})
+  const pcbCancelRef = useRef<() => void>(() => {})
+
+  const [scheduleSchDetect, cancelSchTimer] = useDebounceScheduler(() => {
+    schCancelRef.current()
     let cancelled = false
-    const detectAll = async () => {
-      for (const key of schematicKeys) {
-        if (cancelled) return
-        const f = useDiffStore.getState().schematics[key]
-        if (!f) continue
+    schCancelRef.current = () => { cancelled = true }
 
-        if (f.status === 'added' || f.status === 'deleted') {
-          updateSchematicChanges(key, true)
-          continue
-        }
+    const keys = useDiffStore.getState().schematicKeys
+    if (keys.length === 0) return
 
-        if (!f.oldSvg || !f.newSvg) continue
+    parallelMap(keys, async (key) => {
+      const f = useDiffStore.getState().schematics[key]
+      if (!f) return
 
-        try {
-          const [imgO, imgN] = await Promise.all([
-            loadImg(f.oldSvg),
-            loadImg(f.newSvg),
-          ])
-          if (cancelled) return
-          const hasChanges = detectChanges(imgO, imgN, thresh)
-          updateSchematicChanges(key, hasChanges)
-        } catch {
-          if (!cancelled) updateSchematicChanges(key, null)
-        }
+      if (f.status === 'added' || f.status === 'deleted') {
+        updateSchematicChanges(key, true)
+        return
       }
-    }
 
-    detectAll()
-    return () => { cancelled = true }
-  }, [schematicKeys, thresh, updateSchematicChanges])
+      if (!f.oldSvg || !f.newSvg) return
 
-  // Detect changes for PCB layers
-  useEffect(() => {
-    if (pcbLayers.length === 0) return
+      try {
+        const [imgO, imgN] = await Promise.all([
+          loadImg(f.oldSvg),
+          loadImg(f.newSvg),
+        ])
+        if (cancelled) return
+        const hasChanges = detectChanges(imgO, imgN, useDiffStore.getState().thresh)
+        updateSchematicChanges(key, hasChanges)
+      } catch {
+        if (!cancelled) updateSchematicChanges(key, null)
+      }
+    }, { concurrency: 6, isCancelled: () => cancelled })
+  }, 300)
 
+  const [schedulePcbDetect, cancelPcbTimer] = useDebounceScheduler(() => {
+    pcbCancelRef.current()
     let cancelled = false
-    const detectAll = async () => {
-      for (const layer of pcbLayers) {
-        if (cancelled) return
-        const lp = useDiffStore.getState().pcbLayerPairs[layer]
-        if (!lp) continue
+    pcbCancelRef.current = () => { cancelled = true }
 
-        if (!lp.oldSvg || !lp.newSvg) {
-          // Layer only exists on one side → has changes
-          updateLayerChanges(layer, true)
-          continue
-        }
+    const layers = useDiffStore.getState().pcbLayers
+    if (layers.length === 0) return
 
-        try {
-          const [imgO, imgN] = await Promise.all([
-            loadImg(lp.oldSvg),
-            loadImg(lp.newSvg),
-          ])
-          if (cancelled) return
-          const hasChanges = detectChanges(imgO, imgN, thresh)
-          updateLayerChanges(layer, hasChanges)
-        } catch {
-          if (!cancelled) updateLayerChanges(layer, null)
-        }
+    parallelMap(layers, async (layer) => {
+      const lp = useDiffStore.getState().pcbLayerPairs[layer]
+      if (!lp) return
+
+      if (!lp.oldSvg || !lp.newSvg) {
+        updateLayerChanges(layer, true)
+        return
       }
-    }
 
-    detectAll()
-    return () => { cancelled = true }
-  }, [pcbLayers, thresh, updateLayerChanges])
+      try {
+        const [imgO, imgN] = await Promise.all([
+          loadImg(lp.oldSvg),
+          loadImg(lp.newSvg),
+        ])
+        if (cancelled) return
+        const hasChanges = detectChanges(imgO, imgN, useDiffStore.getState().thresh)
+        updateLayerChanges(layer, hasChanges)
+      } catch {
+        if (!cancelled) updateLayerChanges(layer, null)
+      }
+    }, { concurrency: 4, isCancelled: () => cancelled })
+  }, 300)
+
+  // Trigger debounced detection when deps change
+  useEffect(() => {
+    if (schematicKeys.length > 0) scheduleSchDetect()
+    return () => { cancelSchTimer(); schCancelRef.current() }
+  }, [schematicKeys, thresh, scheduleSchDetect, cancelSchTimer])
+
+  useEffect(() => {
+    if (pcbLayers.length > 0) schedulePcbDetect()
+    return () => { cancelPcbTimer(); pcbCancelRef.current() }
+  }, [pcbLayers, thresh, schedulePcbDetect, cancelPcbTimer])
 
   return (
     <>

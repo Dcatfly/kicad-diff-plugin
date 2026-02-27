@@ -50,8 +50,9 @@ interface DiffState {
   deselectAllPcbLayers: () => void
   updateLayerChanges: (layer: string, hasChanges: boolean | null) => void
 
-  // Smart default tracking
-  _userHasInteracted: boolean
+  // Smart default tracking: true once initial auto-selection is done
+  _schAutoSelectDone: boolean
+  _pcbAutoSelectDone: boolean
 
   // Versions
   pluginVersion: string
@@ -99,14 +100,14 @@ export const useDiffStore = create<DiffState>((set, get) => ({
 
   // Sidebar
   sidebarTab: 'pcb',
-  setSidebarTab: (tab) => set({ sidebarTab: tab, _userHasInteracted: true }),
+  setSidebarTab: (tab) => set({ sidebarTab: tab, _schAutoSelectDone: true, _pcbAutoSelectDone: true }),
 
   // Schematics
   schematicKeys: [],
   schematics: {},
   activeSchematicKey: '',
   setActiveSchematicKey: (key) =>
-    set({ activeSchematicKey: key, _userHasInteracted: true }),
+    set({ activeSchematicKey: key, _schAutoSelectDone: true }),
   updateSchematicChanges: (key, hasChanges) =>
     set((s) => {
       const sch = s.schematics[key]
@@ -115,7 +116,7 @@ export const useDiffStore = create<DiffState>((set, get) => ({
 
       // Smart default: after all detection done, auto-select first changed file
       const update: Partial<DiffState> = { schematics: newSchematics }
-      if (!s._userHasInteracted) {
+      if (!s._schAutoSelectDone) {
         const allDone = s.schematicKeys.every((k) =>
           k === key ? hasChanges !== null : newSchematics[k]?.hasChanges !== null,
         )
@@ -126,6 +127,7 @@ export const useDiffStore = create<DiffState>((set, get) => ({
           if (firstChanged) {
             update.activeSchematicKey = firstChanged
           }
+          update._schAutoSelectDone = true
         }
       }
       return update
@@ -141,17 +143,17 @@ export const useDiffStore = create<DiffState>((set, get) => ({
       const sel = s.selectedPcbLayers.includes(layer)
         ? s.selectedPcbLayers.filter((l) => l !== layer)
         : [...s.selectedPcbLayers, layer]
-      return { selectedPcbLayers: sel, _userHasInteracted: true }
+      return { selectedPcbLayers: sel, _pcbAutoSelectDone: true }
     }),
   selectChangedPcbLayers: () =>
     set((s) => ({
       selectedPcbLayers: s.pcbLayers.filter(
         (l) => s.pcbLayerPairs[l]?.hasChanges === true,
       ),
-      _userHasInteracted: true,
+      _pcbAutoSelectDone: true,
     })),
   deselectAllPcbLayers: () =>
-    set({ selectedPcbLayers: [], _userHasInteracted: true }),
+    set({ selectedPcbLayers: [], _pcbAutoSelectDone: true }),
   updateLayerChanges: (layer, hasChanges) =>
     set((s) => {
       const lp = s.pcbLayerPairs[layer]
@@ -159,7 +161,7 @@ export const useDiffStore = create<DiffState>((set, get) => ({
       const newPairs = { ...s.pcbLayerPairs, [layer]: { ...lp, hasChanges } }
 
       const update: Partial<DiffState> = { pcbLayerPairs: newPairs }
-      if (!s._userHasInteracted) {
+      if (!s._pcbAutoSelectDone) {
         const allDone = s.pcbLayers.every((l) =>
           l === layer ? hasChanges !== null : newPairs[l]?.hasChanges !== null,
         )
@@ -171,13 +173,15 @@ export const useDiffStore = create<DiffState>((set, get) => ({
             update.selectedPcbLayers = changedLayers
           }
           // If none changed, keep all selected
+          update._pcbAutoSelectDone = true
         }
       }
       return update
     }),
 
-  // Smart default tracking
-  _userHasInteracted: false,
+  // Smart default tracking: set to true once initial auto-selection completes
+  _schAutoSelectDone: false,
+  _pcbAutoSelectDone: false,
 
   // Versions
   pluginVersion: '',
@@ -314,7 +318,8 @@ export const useDiffStore = create<DiffState>((set, get) => ({
           exportStatus: { key: 'noKicadFiles' },
           loading: false,
           comparing: false,
-          _userHasInteracted: false,
+          _schAutoSelectDone: false,
+          _pcbAutoSelectDone: false,
         })
         return
       }
@@ -335,7 +340,8 @@ export const useDiffStore = create<DiffState>((set, get) => ({
         sidebarTab: hasPcb ? 'pcb' : 'sch',
 
         // Reset smart default tracking
-        _userHasInteracted: false,
+        _schAutoSelectDone: false,
+        _pcbAutoSelectDone: false,
 
         exportStatus: { key: 'ready', oldCached: oldResult.cached, newCached: newResult.cached },
         loading: false,

@@ -48,14 +48,14 @@ export function getSourceHeight(src: ImageSource | null): number {
   return singleSourceHeight(src)
 }
 
-function getNaturalDimensions(imgOld: ImageSource, imgNew: ImageSource) {
+export function getNaturalDimensions(imgOld: ImageSource, imgNew: ImageSource) {
   const natW = Math.max(getSourceWidth(imgOld), getSourceWidth(imgNew))
   const natH = Math.max(getSourceHeight(imgOld), getSourceHeight(imgNew))
   return { natW, natH }
 }
 
 // Set canvas backing buffer (physical pixels) without touching CSS
-function setCanvasBacking(cvs: HTMLCanvasElement, pw: number, ph: number) {
+export function setCanvasBacking(cvs: HTMLCanvasElement, pw: number, ph: number) {
   cvs.width = pw
   cvs.height = ph
 }
@@ -113,7 +113,7 @@ function drawAllRegion(
   ctx.globalAlpha = saved
 }
 
-function rasterize(img: ImageSource, pw: number, ph: number): ImageData {
+export function rasterize(img: ImageSource, pw: number, ph: number): ImageData {
   const oc = new OffscreenCanvas(pw, ph)
   const octx = oc.getContext('2d')!
   drawAllFull(octx, img, pw, ph)
@@ -131,13 +131,14 @@ function rasterizeRegion(
   return octx.getImageData(0, 0, pw, ph)
 }
 
-function buildDiffMask(
+export function buildDiffMask(
   oldP: Uint8ClampedArray,
   newP: Uint8ClampedArray,
   len: number,
   thresh: number,
+  outMask?: Uint8Array,
 ): Uint8Array {
-  const mask = new Uint8Array(len)
+  const mask = outMask && outMask.length >= len ? (outMask.fill(0), outMask) : new Uint8Array(len)
   for (let p = 0; p < len; p++) {
     const i = p << 2
     const aO = oldP[i + 3]
@@ -162,7 +163,7 @@ function parseBgColor(hex: string): [number, number, number] {
 
 // ─── Shared pixel loops ───
 
-function applyDiffColors(
+export function applyDiffColors(
   oldP: Uint8ClampedArray,
   newP: Uint8ClampedArray,
   mask: Uint8Array,
@@ -170,8 +171,9 @@ function applyDiffColors(
   pw: number,
   ph: number,
   bgColor: string,
+  outBuffer?: ImageData,
 ): ImageData {
-  const out = new ImageData(pw, ph)
+  const out = outBuffer && outBuffer.width === pw && outBuffer.height === ph ? outBuffer : new ImageData(pw, ph)
   const od = out.data
   const fadeAlpha = 1 - fade / 100
   const [bgR, bgG, bgB] = parseBgColor(bgColor)
@@ -214,7 +216,7 @@ function applyDiffColors(
   return out
 }
 
-function applySideAnnotatedColors(
+export function applySideAnnotatedColors(
   oldP: Uint8ClampedArray,
   newP: Uint8ClampedArray,
   pw: number,
@@ -223,12 +225,14 @@ function applySideAnnotatedColors(
   fade: number,
   thresh: number,
   bgColor: string,
+  outBuffer?: ImageData,
+  mask?: Uint8Array,
 ): ImageData {
   const fadeAlpha = 1 - fade / 100
   const [bgR, bgG, bgB] = parseBgColor(bgColor)
   const [fadeBgR, fadeBgG, fadeBgB] = FADE_BG
 
-  const outImg = new ImageData(pw, ph)
+  const outImg = outBuffer && outBuffer.width === pw && outBuffer.height === ph ? outBuffer : new ImageData(pw, ph)
   const od = outImg.data
   for (let p = 0; p < pw * ph; p++) {
     const i = p << 2
@@ -243,16 +247,18 @@ function applySideAnnotatedColors(
     const r = isOld ? ro : rn
     const g = isOld ? go : gn
     const b = isOld ? bo : bn
-    const diff = Math.max(
-      Math.abs(ro - rn),
-      Math.abs(go - gn),
-      Math.abs(bo - bn),
-      Math.abs(aO - aN),
-    )
+    const isDiff = mask
+      ? mask[p] !== 0
+      : Math.max(
+          Math.abs(ro - rn),
+          Math.abs(go - gn),
+          Math.abs(bo - bn),
+          Math.abs(aO - aN),
+        ) > thresh
 
     // Highlight only when this side has content at this pixel
     const mySideHasContent = isOld ? aO > 0 : aN > 0
-    if (diff > thresh && mySideHasContent) {
+    if (isDiff && mySideHasContent) {
       if (isOld) {
         od[i] = Math.min(255, Math.round(r * 0.5 + 120))
         od[i + 1] = Math.round(g * 0.35)
@@ -302,7 +308,7 @@ export function renderDiff(
 // ─── Overlay pixel blending ───
 // Identical pixels are shown as-is; different pixels blend old*(1-t) + new*t.
 
-function applyOverlayColors(
+export function applyOverlayColors(
   oldP: Uint8ClampedArray,
   newP: Uint8ClampedArray,
   mask: Uint8Array,
@@ -310,8 +316,9 @@ function applyOverlayColors(
   pw: number,
   ph: number,
   bgColor: string,
+  outBuffer?: ImageData,
 ): ImageData {
-  const out = new ImageData(pw, ph)
+  const out = outBuffer && outBuffer.width === pw && outBuffer.height === ph ? outBuffer : new ImageData(pw, ph)
   const od = out.data
   const t = overlay / 100
   const [bgR, bgG, bgB] = parseBgColor(bgColor)
