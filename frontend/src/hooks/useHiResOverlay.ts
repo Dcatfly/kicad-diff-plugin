@@ -1,15 +1,12 @@
 // ─── Hi-res viewport overlay management ───
 // Debounced pixel-perfect viewport rendering after scroll/zoom stabilises.
+// Uses GLRenderer with UV sub-region for GPU-accelerated viewport rendering.
 
 import { useCallback, useEffect, useRef } from 'react'
 import { useDiffStore } from '../stores/useDiffStore'
 import type { ImageSource } from '../lib/renderer'
-import {
-  renderDiffViewport,
-  renderOverlayViewport,
-  renderSideAnnotatedViewport,
-  renderSideRaw,
-} from '../lib/renderer'
+import { DPR } from '../lib/renderer'
+import { GLRenderer, ensureGL } from '../lib/glRenderer'
 import { HI_RES_DEBOUNCE_MS } from '../lib/constants'
 import { useDebounceScheduler } from '../lib/scheduling'
 
@@ -39,6 +36,11 @@ export function useHiResOverlay({
   const hiResRef = useRef<HTMLCanvasElement>(null)
   const hiResLRef = useRef<HTMLCanvasElement>(null)
   const hiResRRef = useRef<HTMLCanvasElement>(null)
+
+  // GLRenderer instances for hi-res canvases
+  const hiResGlRef = useRef<GLRenderer | null>(null)
+  const hiResGlLRef = useRef<GLRenderer | null>(null)
+  const hiResGlRRef = useRef<GLRenderer | null>(null)
 
   const hideHiRes = useCallback(() => {
     for (const ref of [hiResRef, hiResLRef, hiResRRef]) {
@@ -84,52 +86,77 @@ export function useHiResOverlay({
     const offsetY = (cy0 - srcY) * scale
     const cssW = Math.round(cw * scale)
     const cssH = Math.round(ch * scale)
+    const vpPw = Math.round(cssW * DPR)
+    const vpPh = Math.round(cssH * DPR)
 
-    if (state.viewMode === 'diff' && hiResRef.current) {
-      hiResRef.current.style.left = (scrollEl.scrollLeft + offsetX) + 'px'
-      hiResRef.current.style.top = (scrollEl.scrollTop + offsetY) + 'px'
-      renderDiffViewport(
-        hiResRef.current,
-        images.imgOld, images.imgNew,
-        state.fade, state.thresh,
-        cx0, cy0, cw, ch, cssW, cssH,
-        state.bgColor,
-      )
-      showHiRes(hiResRef)
-    } else if (state.viewMode === 'overlay' && hiResRef.current) {
-      hiResRef.current.style.left = (scrollEl.scrollLeft + offsetX) + 'px'
-      hiResRef.current.style.top = (scrollEl.scrollTop + offsetY) + 'px'
-      renderOverlayViewport(
-        hiResRef.current,
-        images.imgOld, images.imgNew,
-        state.overlay, state.thresh,
-        cx0, cy0, cw, ch, cssW, cssH,
-        state.bgColor,
-      )
+    // Hi-res viewport renders the visible sub-region rasterized at the
+    // viewport's full physical pixel resolution (vpPw × vpPh). The
+    // texture covers the entire output canvas (resetViewport), so there
+    // is no UV-based upscaling — Canvas 2D's high-quality resampling
+    // handles the zoom, giving pixel-perfect sharpness at any level.
+
+    // Position a hi-res canvas over its scroll container
+    const layoutCanvas = (canvas: HTMLCanvasElement, scrollLeft: number, scrollTop: number) => {
+      canvas.style.left = (scrollLeft + offsetX) + 'px'
+      canvas.style.top = (scrollTop + offsetY) + 'px'
+      canvas.style.width = cssW + 'px'
+      canvas.style.height = cssH + 'px'
+    }
+
+    if ((state.viewMode === 'diff' || state.viewMode === 'overlay') && hiResRef.current) {
+      layoutCanvas(hiResRef.current, scrollEl.scrollLeft, scrollEl.scrollTop)
+
+      const gl = ensureGL(hiResGlRef, hiResRef.current)
+      gl.uploadPairRegion(images.imgOld, images.imgNew, cx0, cy0, cw, ch, vpPw, vpPh)
+      gl.setSize(vpPw, vpPh)
+      gl.resetViewport()
+      if (state.viewMode === 'diff') {
+        gl.renderDiff(state.thresh, state.fade, state.bgColor)
+      } else {
+        gl.renderOverlay(state.thresh, state.overlay, state.bgColor)
+      }
+
       showHiRes(hiResRef)
     } else if (state.viewMode === 'side' && hiResLRef.current && hiResRRef.current) {
+      // Batch all layout reads before any style writes to avoid layout thrashing
       const rightScrollEl = rightPanelRef?.current
-      hiResLRef.current.style.left = (scrollEl.scrollLeft + offsetX) + 'px'
-      hiResLRef.current.style.top = (scrollEl.scrollTop + offsetY) + 'px'
+      const leftScrollLeft = scrollEl.scrollLeft
+      const leftScrollTop = scrollEl.scrollTop
+      const rightScrollLeft = rightScrollEl?.scrollLeft ?? 0
+      const rightScrollTop = rightScrollEl?.scrollTop ?? 0
+
+      layoutCanvas(hiResLRef.current, leftScrollLeft, leftScrollTop)
       if (rightScrollEl) {
-        hiResRRef.current.style.left = (rightScrollEl.scrollLeft + offsetX) + 'px'
-        hiResRRef.current.style.top = (rightScrollEl.scrollTop + offsetY) + 'px'
-      }
-      if (state.rawMode) {
-        const ctxL = hiResLRef.current.getContext('2d')!
-        const ctxR = hiResRRef.current.getContext('2d')!
-        const viewport = { srcX: cx0, srcY: cy0, srcW: cw, srcH: ch, cssW, cssH }
-        renderSideRaw(hiResLRef.current, ctxL, images.imgOld, dims.natW, dims.natH, state.bgColor, viewport)
-        renderSideRaw(hiResRRef.current, ctxR, images.imgNew, dims.natW, dims.natH, state.bgColor, viewport)
+        layoutCanvas(hiResRRef.current, rightScrollLeft, rightScrollTop)
       } else {
-        renderSideAnnotatedViewport(
-          hiResLRef.current, hiResRRef.current,
-          images.imgOld, images.imgNew,
-          state.fade, state.thresh,
-          cx0, cy0, cw, ch, cssW, cssH,
-          state.bgColor,
-        )
+        hiResRRef.current.style.width = cssW + 'px'
+        hiResRRef.current.style.height = cssH + 'px'
       }
+
+      const glL = ensureGL(hiResGlLRef, hiResLRef.current)
+      const glR = ensureGL(hiResGlRRef, hiResRRef.current)
+
+      if (state.rawMode) {
+        glL.uploadSingleRegion(images.imgOld, cx0, cy0, cw, ch, vpPw, vpPh)
+        glR.uploadSingleRegion(images.imgNew, cx0, cy0, cw, ch, vpPw, vpPh)
+      } else {
+        glL.uploadPairRegion(images.imgOld, images.imgNew, cx0, cy0, cw, ch, vpPw, vpPh)
+        glR.uploadPairRegion(images.imgOld, images.imgNew, cx0, cy0, cw, ch, vpPw, vpPh)
+      }
+
+      glL.setSize(vpPw, vpPh)
+      glR.setSize(vpPw, vpPh)
+      glL.resetViewport()
+      glR.resetViewport()
+
+      if (state.rawMode) {
+        glL.renderRaw(state.bgColor)
+        glR.renderRaw(state.bgColor)
+      } else {
+        glL.renderSideAnnotated(state.thresh, state.fade, state.bgColor, true)
+        glR.renderSideAnnotated(state.thresh, state.fade, state.bgColor, false)
+      }
+
       showHiRes(hiResLRef)
       showHiRes(hiResRRef)
     }
@@ -160,6 +187,19 @@ export function useHiResOverlay({
       }
     }
   }, [containerRef, leftPanelRef, rightPanelRef, scheduleHiRes])
+
+  // ─── Cleanup: dispose hi-res GLRenderers on unmount ───
+
+  useEffect(() => {
+    return () => {
+      hiResGlRef.current?.dispose()
+      hiResGlLRef.current?.dispose()
+      hiResGlRRef.current?.dispose()
+      hiResGlRef.current = null
+      hiResGlLRef.current = null
+      hiResGlRRef.current = null
+    }
+  }, [])
 
   return { hiResRef, hiResLRef, hiResRRef, hideHiRes, scheduleHiRes }
 }
