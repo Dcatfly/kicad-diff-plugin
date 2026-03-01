@@ -11,7 +11,6 @@ import {
   applyZoom,
 } from '../lib/renderer'
 import { GLRenderer, ensureGL } from '../lib/glRenderer'
-import { consumePendingScroll, type PendingScroll } from './usePanZoom'
 import { useRafScheduler } from '../lib/scheduling'
 
 export interface UseRenderPipelineOptions {
@@ -20,7 +19,6 @@ export interface UseRenderPipelineOptions {
   canvasRRef?: React.RefObject<HTMLCanvasElement | null>
   imagesRef: React.RefObject<{ imgOld: ImageSource; imgNew: ImageSource } | null>
   contentDimsRef: React.MutableRefObject<{ natW: number; natH: number } | null>
-  pendingScrollRef: React.MutableRefObject<PendingScroll | null>
   scheduleHiRes: () => void
 }
 
@@ -35,7 +33,6 @@ export function useRenderPipeline({
   canvasRRef,
   imagesRef,
   contentDimsRef,
-  pendingScrollRef,
   scheduleHiRes,
 }: UseRenderPipelineOptions): UseRenderPipelineReturn {
   // GLRenderer instances (one per canvas)
@@ -113,26 +110,31 @@ export function useRenderPipeline({
       applyZoom(cvs, natW, natH, state.zoom)
     }
 
-    consumePendingScroll(pendingScrollRef)
     scheduleHiRes()
-  }, [canvasRef, canvasLRef, canvasRRef, imagesRef, contentDimsRef, pendingScrollRef, scheduleHiRes])
+  }, [canvasRef, canvasLRef, canvasRRef, imagesRef, contentDimsRef, scheduleHiRes])
 
   // ─── Effect B: Parameter rendering (lightweight — rAF-coalesced) ───
-
-  const fade = useDiffStore((s) => s.fade)
-  const thresh = useDiffStore((s) => s.thresh)
-  const overlay = useDiffStore((s) => s.overlay)
-  const bgColor = useDiffStore((s) => s.bgColor)
-  const viewMode = useDiffStore((s) => s.viewMode)
-  const rawMode = useDiffStore((s) => s.rawMode)
+  // Subscribe to render-relevant store fields directly (no reactive selectors)
+  // to avoid re-rendering the host component on every slider drag.
 
   const [scheduleParamRender] = useRafScheduler(renderFrame)
 
   useEffect(() => {
-    // Skip if images haven't loaded yet (Effect A will call renderFrame)
-    if (!imagesRef.current) return
-    scheduleParamRender()
-  }, [fade, thresh, overlay, bgColor, viewMode, rawMode, scheduleParamRender, imagesRef])
+    let prev = useDiffStore.getState()
+
+    return useDiffStore.subscribe((state) => {
+      const changed =
+        state.fade !== prev.fade ||
+        state.thresh !== prev.thresh ||
+        state.overlay !== prev.overlay ||
+        state.bgColor !== prev.bgColor ||
+        state.viewMode !== prev.viewMode ||
+        state.rawMode !== prev.rawMode
+      prev = state
+      if (!changed || !imagesRef.current) return
+      scheduleParamRender()
+    })
+  }, [scheduleParamRender, imagesRef])
 
   // ─── Cleanup: dispose GLRenderers on unmount ───
 

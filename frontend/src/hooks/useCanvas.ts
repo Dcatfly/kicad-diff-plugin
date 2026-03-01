@@ -3,13 +3,13 @@
 //   useHiResOverlay   — debounced hi-res viewport overlay
 //   useRenderPipeline — cached pixel render pipeline
 //   useContentLoader  — async image loading (pure data)
-//   usePanZoom        — wheel zoom + drag pan
+//   usePanZoom        — wheel zoom + drag pan (CSS transform-based)
 
-import { useEffect, useLayoutEffect, useRef } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useRef } from 'react'
 import { useDiffStore } from '../stores/useDiffStore'
 import type { ImageSource } from '../lib/renderer'
 import { applyZoom } from '../lib/renderer'
-import { usePanZoom, consumePendingScroll, type PendingScroll } from './usePanZoom'
+import { usePanZoom, clampPan, type PanState } from './usePanZoom'
 import { useHiResOverlay } from './useHiResOverlay'
 import { useRenderPipeline } from './useRenderPipeline'
 import { useContentLoader } from './useContentLoader'
@@ -28,18 +28,36 @@ export function useCanvas(
   leftPanelRef?: React.RefObject<HTMLElement | null>,
   rightPanelRef?: React.RefObject<HTMLElement | null>,
 ): HiResRefs {
-  const pendingScrollRef = useRef<PendingScroll | null>(null)
+  const panRef = useRef<PanState>({ x: 0, y: 0 })
+  const pendingPanRef = useRef<PanState | null>(null)
   const contentDimsRef = useRef<{ natW: number; natH: number } | null>(null)
   const imagesRef = useRef<{ imgOld: ImageSource; imgNew: ImageSource } | null>(null)
 
-  usePanZoom(containerRef, pendingScrollRef, leftPanelRef, rightPanelRef)
+  // ─── Hi-res overlay (needs panRef) ───
 
   const { hiResRef, hiResLRef, hiResRRef, hideHiRes, scheduleHiRes } =
-    useHiResOverlay({ containerRef, leftPanelRef, rightPanelRef, imagesRef, contentDimsRef })
+    useHiResOverlay({ containerRef, leftPanelRef, imagesRef, contentDimsRef, panRef })
+
+  // ─── applyPan: set CSS transform on all canvases + trigger hi-res ───
+
+  const applyPan = useCallback(() => {
+    const { x, y } = panRef.current
+    const transform = `translate(${-x}px, ${-y}px)`
+    for (const ref of [canvasRef, canvasLRef, canvasRRef]) {
+      if (ref?.current) ref.current.style.transform = transform
+    }
+    scheduleHiRes()
+  }, [canvasRef, canvasLRef, canvasRRef, scheduleHiRes])
+
+  // ─── Pan + zoom interaction ───
+
+  usePanZoom(containerRef, panRef, pendingPanRef, contentDimsRef, applyPan, leftPanelRef, rightPanelRef)
+
+  // ─── Render pipeline ───
 
   const { renderFrame, invalidateCaches } =
     useRenderPipeline({ canvasRef, canvasLRef, canvasRRef, imagesRef,
-      contentDimsRef, pendingScrollRef, scheduleHiRes })
+      contentDimsRef, scheduleHiRes })
 
   // ─── Content loading → render orchestration ───
 
@@ -47,16 +65,19 @@ export function useCanvas(
 
   useEffect(() => {
     if (images) {
-      // New images loaded — update ref, invalidate caches, render
+      // New images loaded — update ref, invalidate caches, render, reset pan
       imagesRef.current = images
       invalidateCaches()
       renderFrame()
+      panRef.current = { x: 0, y: 0 }
+      applyPan()
     } else {
       // No content — clear everything
       imagesRef.current = null
       contentDimsRef.current = null
       invalidateCaches()
       hideHiRes()
+      panRef.current = { x: 0, y: 0 }
       for (const ref of [canvasRef, canvasLRef, canvasRRef]) {
         const cvs = ref?.current
         if (cvs) {
@@ -64,10 +85,11 @@ export function useCanvas(
           cvs.height = 0
           cvs.style.width = ''
           cvs.style.height = ''
+          cvs.style.transform = ''
         }
       }
     }
-  }, [images, canvasRef, canvasLRef, canvasRRef, renderFrame, invalidateCaches, hideHiRes])
+  }, [images, canvasRef, canvasLRef, canvasRRef, renderFrame, invalidateCaches, hideHiRes, applyPan])
 
   // ─── Effect C: Zoom (CSS-only, instant) ───
 
@@ -85,10 +107,21 @@ export function useCanvas(
       if (canvasRRef?.current) applyZoom(canvasRRef.current, dims.natW, dims.natH, zoom)
     }
 
-    consumePendingScroll(pendingScrollRef)
+    // Consume pending pan from wheel zoom, or clamp existing pan
+    const pending = pendingPanRef.current
+    if (pending) {
+      pendingPanRef.current = null
+      panRef.current = pending
+    } else {
+      const state = useDiffStore.getState()
+      const clampEl = (state.viewMode === 'side' && leftPanelRef?.current)
+        ? leftPanelRef.current
+        : containerRef.current
+      panRef.current = clampPan(panRef.current, dims, zoom, clampEl)
+    }
 
-    scheduleHiRes()
-  }, [zoom, viewMode, canvasRef, canvasLRef, canvasRRef, scheduleHiRes])
+    applyPan()
+  }, [zoom, viewMode, canvasRef, canvasLRef, canvasRRef, applyPan, containerRef, leftPanelRef])
 
   return { hiResRef, hiResLRef, hiResRRef }
 }

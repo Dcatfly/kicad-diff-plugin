@@ -1,5 +1,5 @@
 // ─── Hi-res viewport overlay management ───
-// Debounced pixel-perfect viewport rendering after scroll/zoom stabilises.
+// Debounced pixel-perfect viewport rendering after pan/zoom stabilises.
 // Uses GLRenderer with UV sub-region for GPU-accelerated viewport rendering.
 
 import { useCallback, useEffect, useRef } from 'react'
@@ -9,13 +9,14 @@ import { DPR } from '../lib/renderer'
 import { GLRenderer, ensureGL } from '../lib/glRenderer'
 import { HI_RES_DEBOUNCE_MS } from '../lib/constants'
 import { useDebounceScheduler } from '../lib/scheduling'
+import type { PanState } from './usePanZoom'
 
 export interface UseHiResOverlayOptions {
   containerRef: React.RefObject<HTMLElement | null>
   leftPanelRef?: React.RefObject<HTMLElement | null>
-  rightPanelRef?: React.RefObject<HTMLElement | null>
   imagesRef: React.RefObject<{ imgOld: ImageSource; imgNew: ImageSource } | null>
   contentDimsRef: React.RefObject<{ natW: number; natH: number } | null>
+  panRef: React.RefObject<PanState>
 }
 
 export interface UseHiResOverlayReturn {
@@ -29,9 +30,9 @@ export interface UseHiResOverlayReturn {
 export function useHiResOverlay({
   containerRef,
   leftPanelRef,
-  rightPanelRef,
   imagesRef,
   contentDimsRef,
+  panRef,
 }: UseHiResOverlayOptions): UseHiResOverlayReturn {
   const hiResRef = useRef<HTMLCanvasElement>(null)
   const hiResLRef = useRef<HTMLCanvasElement>(null)
@@ -60,17 +61,20 @@ export function useHiResOverlay({
 
     const state = useDiffStore.getState()
 
-    const scrollEl =
+    // Use the container (or left panel in side mode) for viewport dimensions
+    const viewportEl =
       state.viewMode === 'side'
         ? leftPanelRef?.current
         : containerRef.current
-    if (!scrollEl) return
+    if (!viewportEl) return
 
     const scale = state.zoom / 100
-    const srcX = scrollEl.scrollLeft / scale
-    const srcY = scrollEl.scrollTop / scale
-    const srcW = scrollEl.clientWidth / scale
-    const srcH = scrollEl.clientHeight / scale
+    const panX = panRef.current.x
+    const panY = panRef.current.y
+    const srcX = panX / scale
+    const srcY = panY / scale
+    const srcW = viewportEl.clientWidth / scale
+    const srcH = viewportEl.clientHeight / scale
 
     // Clamp source rect to image bounds — only render the overlap
     const cx0 = Math.max(0, srcX)
@@ -82,6 +86,8 @@ export function useHiResOverlay({
     if (cw <= 0 || ch <= 0) return
 
     // Hi-res canvas offset & size in CSS pixels
+    // Since the hi-res canvas sits inside overflow-hidden container (not transformed),
+    // position it relative to the viewport — no scroll offset needed.
     const offsetX = (cx0 - srcX) * scale
     const offsetY = (cy0 - srcY) * scale
     const cssW = Math.round(cw * scale)
@@ -89,22 +95,16 @@ export function useHiResOverlay({
     const vpPw = Math.round(cssW * DPR)
     const vpPh = Math.round(cssH * DPR)
 
-    // Hi-res viewport renders the visible sub-region rasterized at the
-    // viewport's full physical pixel resolution (vpPw × vpPh). The
-    // texture covers the entire output canvas (resetViewport), so there
-    // is no UV-based upscaling — Canvas 2D's high-quality resampling
-    // handles the zoom, giving pixel-perfect sharpness at any level.
-
-    // Position a hi-res canvas over its scroll container
-    const layoutCanvas = (canvas: HTMLCanvasElement, scrollLeft: number, scrollTop: number) => {
-      canvas.style.left = (scrollLeft + offsetX) + 'px'
-      canvas.style.top = (scrollTop + offsetY) + 'px'
+    // Position a hi-res canvas within its container
+    const layoutCanvas = (canvas: HTMLCanvasElement) => {
+      canvas.style.left = offsetX + 'px'
+      canvas.style.top = offsetY + 'px'
       canvas.style.width = cssW + 'px'
       canvas.style.height = cssH + 'px'
     }
 
     if ((state.viewMode === 'diff' || state.viewMode === 'overlay') && hiResRef.current) {
-      layoutCanvas(hiResRef.current, scrollEl.scrollLeft, scrollEl.scrollTop)
+      layoutCanvas(hiResRef.current)
 
       const gl = ensureGL(hiResGlRef, hiResRef.current)
       gl.uploadPairRegion(images.imgOld, images.imgNew, cx0, cy0, cw, ch, vpPw, vpPh)
@@ -118,20 +118,8 @@ export function useHiResOverlay({
 
       showHiRes(hiResRef)
     } else if (state.viewMode === 'side' && hiResLRef.current && hiResRRef.current) {
-      // Batch all layout reads before any style writes to avoid layout thrashing
-      const rightScrollEl = rightPanelRef?.current
-      const leftScrollLeft = scrollEl.scrollLeft
-      const leftScrollTop = scrollEl.scrollTop
-      const rightScrollLeft = rightScrollEl?.scrollLeft ?? 0
-      const rightScrollTop = rightScrollEl?.scrollTop ?? 0
-
-      layoutCanvas(hiResLRef.current, leftScrollLeft, leftScrollTop)
-      if (rightScrollEl) {
-        layoutCanvas(hiResRRef.current, rightScrollLeft, rightScrollTop)
-      } else {
-        hiResRRef.current.style.width = cssW + 'px'
-        hiResRRef.current.style.height = cssH + 'px'
-      }
+      layoutCanvas(hiResLRef.current)
+      layoutCanvas(hiResRRef.current)
 
       const glL = ensureGL(hiResGlLRef, hiResLRef.current)
       const glR = ensureGL(hiResGlRRef, hiResRRef.current)
@@ -167,26 +155,6 @@ export function useHiResOverlay({
     hideHiRes()
     debouncedRender()
   }, [hideHiRes, debouncedRender])
-
-  // ─── Scroll listener: triggers hi-res re-render on scroll/drag ───
-
-  useEffect(() => {
-    const targets: HTMLElement[] = []
-    if (leftPanelRef?.current) targets.push(leftPanelRef.current)
-    if (rightPanelRef?.current) targets.push(rightPanelRef.current)
-    if (containerRef.current && targets.length === 0) targets.push(containerRef.current)
-
-    if (targets.length === 0) return
-
-    for (const t of targets) {
-      t.addEventListener('scroll', scheduleHiRes, { passive: true })
-    }
-    return () => {
-      for (const t of targets) {
-        t.removeEventListener('scroll', scheduleHiRes)
-      }
-    }
-  }, [containerRef, leftPanelRef, rightPanelRef, scheduleHiRes])
 
   // ─── Cleanup: dispose hi-res GLRenderers on unmount ───
 

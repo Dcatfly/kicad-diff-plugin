@@ -60,10 +60,10 @@ export default function SideBySideView() {
       {/* Left panel */}
       <div
         ref={leftPanelRef}
-        className="side-panel flex-1 overflow-auto bg-bg-canvas relative"
+        className="side-panel flex-1 overflow-hidden bg-bg-canvas relative"
       >
         <div className="side-label-anchor"><div className="side-label">{oldLabel}</div></div>
-        <canvas ref={canvasLRef} />
+        <canvas ref={canvasLRef} className="will-change-transform" />
         <canvas
           ref={hiResLRef}
           className="absolute pointer-events-none z-[5]"
@@ -77,10 +77,10 @@ export default function SideBySideView() {
       {/* Right panel */}
       <div
         ref={rightPanelRef}
-        className="side-panel flex-1 overflow-auto bg-bg-canvas relative"
+        className="side-panel flex-1 overflow-hidden bg-bg-canvas relative"
       >
         <div className="side-label-anchor"><div className="side-label">{newLabel}</div></div>
-        <canvas ref={canvasRRef} />
+        <canvas ref={canvasRRef} className="will-change-transform" />
         <canvas
           ref={hiResRRef}
           className="absolute pointer-events-none z-[5]"

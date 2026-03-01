@@ -26,9 +26,9 @@ export default function DiffCanvas() {
     <div className="relative flex-1 overflow-hidden bg-bg-canvas">
       <div
         ref={containerRef}
-        className="relative h-full w-full overflow-auto"
+        className="relative h-full w-full overflow-hidden"
       >
-        <canvas ref={canvasRef} />
+        <canvas ref={canvasRef} className="will-change-transform" />
         <canvas
           ref={hiResRef}
           className="absolute pointer-events-none"

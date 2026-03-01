@@ -110,9 +110,9 @@ input[type='range']::-moz-range-thumb {
   animation: spin 0.8s linear infinite;
 }
 
-/* Side panel label anchor: sticky, zero-height so canvas starts at top */
+/* Side panel label anchor: absolute, zero-height so canvas starts at top */
 .side-label-anchor {
-  position: sticky;
+  position: absolute;
   top: 0;
   left: 0;
   z-index: 10;
