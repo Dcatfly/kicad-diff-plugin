@@ -6,6 +6,10 @@ import { getSourceWidth, getSourceHeight } from '../lib/renderer'
 
 const imgCache = new Map<string, HTMLImageElement>()
 
+export function clearImgCache() {
+  imgCache.clear()
+}
+
 export function loadImg(src: string): Promise<HTMLImageElement> {
   const cached = imgCache.get(src)
   if (cached) return Promise.resolve(cached)

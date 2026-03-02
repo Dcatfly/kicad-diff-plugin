@@ -19,5 +19,5 @@ export const ZOOM_TIER_LARGE = 300
 // Rendering
 export const FADE_BG: [number, number, number] = [15, 15, 35]
 export const HI_RES_DEBOUNCE_MS = 150
-export const CHANGE_DETECT_SAMPLE_SIZE = 400
+export const CHANGE_DETECT_SAMPLE_SIZE = 128
 export const LAYER_ALPHA = 0.4

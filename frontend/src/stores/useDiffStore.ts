@@ -18,6 +18,7 @@ import {
 } from '../lib/constants'
 import { buildFilePairs, buildLayerPairs } from '../lib/filePairing'
 import { translate } from '../lib/i18n'
+import { clearImgCache } from '../hooks/useImageLoader'
 
 interface DiffState {
   // View
@@ -266,6 +267,7 @@ export const useDiffStore = create<DiffState>((set, get) => ({
     }
     const t = (k: string) => translate(locale, k)
 
+    clearImgCache()
     set({ comparing: true, loading: true, loadingText: t('exporting') })
 
     try {
