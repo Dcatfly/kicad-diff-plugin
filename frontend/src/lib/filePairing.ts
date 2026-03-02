@@ -28,6 +28,8 @@ export function buildFilePairs(
       name: src.name,
       oldSvg: oldFile ? oldFile.svg : null,
       newSvg: newFile ? newFile.svg : null,
+      oldContentHash: oldFile?.contentHash,
+      newContentHash: newFile?.contentHash,
       status,
       hasChanges: null,
     }
@@ -53,10 +55,10 @@ export function buildLayerPairs(
     return { pcbName: '', layers: [], pairs: {} }
   }
 
-  const oldByLayer: Record<string, string> = {}
-  for (const f of oldLayers[pcbName] ?? []) oldByLayer[f.layer] = f.svg
-  const newByLayer: Record<string, string> = {}
-  for (const f of newLayers[pcbName] ?? []) newByLayer[f.layer] = f.svg
+  const oldByLayer: Record<string, { svg: string; contentHash?: string }> = {}
+  for (const f of oldLayers[pcbName] ?? []) oldByLayer[f.layer] = { svg: f.svg, contentHash: f.contentHash }
+  const newByLayer: Record<string, { svg: string; contentHash?: string }> = {}
+  for (const f of newLayers[pcbName] ?? []) newByLayer[f.layer] = { svg: f.svg, contentHash: f.contentHash }
 
   const allLayerSet = new Set([...Object.keys(oldByLayer), ...Object.keys(newByLayer)])
   const layers = [...allLayerSet]
@@ -66,8 +68,10 @@ export function buildLayerPairs(
     pairs[layer] = {
       layer,
       pcbName,
-      oldSvg: oldByLayer[layer] ?? null,
-      newSvg: newByLayer[layer] ?? null,
+      oldSvg: oldByLayer[layer]?.svg ?? null,
+      newSvg: newByLayer[layer]?.svg ?? null,
+      oldContentHash: oldByLayer[layer]?.contentHash,
+      newContentHash: newByLayer[layer]?.contentHash,
       hasChanges: null,
     }
   }

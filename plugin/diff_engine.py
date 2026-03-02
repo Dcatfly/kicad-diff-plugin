@@ -4,6 +4,7 @@ Extracted from kicad_diff/server.py for use in the plugin server.
 """
 from __future__ import annotations
 
+import hashlib
 import io
 import logging
 import os
@@ -13,6 +14,7 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+import xml.etree.ElementTree as ET
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -226,6 +228,55 @@ def get_versions(repo_root: Path) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# SVG optimisation & content hash
+# ---------------------------------------------------------------------------
+
+_SVG_NS = "http://www.w3.org/2000/svg"
+_STRIP_TAGS = {f"{{{_SVG_NS}}}title", f"{{{_SVG_NS}}}desc"}
+_FLOAT_RE = re.compile(r"\d+\.\d{3,}")
+
+
+def _truncate_match(m: re.Match) -> str:
+    """Truncate a decimal number to 2 decimal places."""
+    return f"{float(m.group()):.2f}"
+
+
+def optimize_svg(path: Path) -> None:
+    """Optimize an SVG file in-place (stdlib xml.etree + re).
+
+    - Remove <title> and <desc> elements (title contains nondeterministic timestamps)
+    - Remove XML comments
+    - Truncate coordinate precision to 2 decimal places
+    """
+    try:
+        tree = ET.parse(path)
+        root = tree.getroot()
+
+        # Remove comments and <title>/<desc> elements
+        for parent in root.iter():
+            to_remove = [
+                child for child in parent
+                if child.tag in _STRIP_TAGS or callable(child.tag)  # callable = Comment/PI
+            ]
+            for child in to_remove:
+                parent.remove(child)
+
+        # Serialize, then truncate float precision
+        ET.indent(tree, space="")
+        raw = ET.tostring(root, encoding="unicode", xml_declaration=True)
+        optimized = _FLOAT_RE.sub(_truncate_match, raw)
+        path.write_text(optimized, encoding="utf-8")
+    except Exception:
+        logger.warning("SVG optimization failed for %s, keeping original", path, exc_info=True)
+
+
+def _svg_content_hash(svg_path: Path) -> str:
+    """Return sha256 hex digest of an (already optimized) SVG file."""
+    data = svg_path.read_bytes()
+    return hashlib.sha256(data).hexdigest()
+
+
+# ---------------------------------------------------------------------------
 # SVG export
 # ---------------------------------------------------------------------------
 
@@ -422,6 +473,10 @@ def export_for_ref(
                 logger.warning("Export failed for %s: %s", filepath, e)
                 continue
 
+        # Optimize all exported SVGs (removes titles/comments, truncates precision)
+        for svg in out_dir.rglob("*.svg"):
+            optimize_svg(svg)
+
         if not is_working:
             complete_marker.touch()
 
@@ -450,6 +505,7 @@ def build_structured_result(out_dir: Path, output_dir: str) -> dict:
             "name": name,
             "type": "sch",
             "svg": "output/" + str(rel_path).replace("\\", "/"),
+            "contentHash": _svg_content_hash(svg),
         })
 
     # PCB layer directories (pcb-layers-{name}/)
@@ -469,6 +525,7 @@ def build_structured_result(out_dir: Path, output_dir: str) -> dict:
                 layer_files.append({
                     "layer": layer_name,
                     "svg": "output/" + str(rel_path).replace("\\", "/"),
+                    "contentHash": _svg_content_hash(svg),
                 })
         if layer_files:
             pcb_layers[pcb_name] = layer_files

@@ -60,6 +60,12 @@ function App() {
 
       if (!f.oldSvg || !f.newSvg) return
 
+      // Skip pixel diff when content hashes match
+      if (f.oldContentHash && f.newContentHash && f.oldContentHash === f.newContentHash) {
+        updateSchematicChanges(key, false)
+        return
+      }
+
       try {
         const [imgO, imgN] = await Promise.all([
           loadImg(f.oldSvg),
@@ -88,6 +94,12 @@ function App() {
 
       if (!lp.oldSvg || !lp.newSvg) {
         updateLayerChanges(layer, true)
+        return
+      }
+
+      // Skip pixel diff when content hashes match
+      if (lp.oldContentHash && lp.newContentHash && lp.oldContentHash === lp.newContentHash) {
+        updateLayerChanges(layer, false)
         return
       }
 

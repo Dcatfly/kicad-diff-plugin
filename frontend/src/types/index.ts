@@ -35,11 +35,13 @@ export interface ExportFile {
   name: string
   type: FileType
   svg: string
+  contentHash?: string
 }
 
 export interface PcbLayerFile {
   layer: string
   svg: string
+  contentHash?: string
 }
 
 export interface ExportResult {
@@ -56,6 +58,8 @@ export interface FilePair {
   name: string
   oldSvg: string | null
   newSvg: string | null
+  oldContentHash?: string
+  newContentHash?: string
   status: FileStatus
   hasChanges: boolean | null
 }
@@ -65,6 +69,8 @@ export interface LayerPair {
   pcbName: string
   oldSvg: string | null
   newSvg: string | null
+  oldContentHash?: string
+  newContentHash?: string
   hasChanges: boolean | null
 }
 

@@ -4,7 +4,39 @@ import type { LayerPair } from '../types'
 import type { ImageSource } from '../lib/renderer'
 import { getSourceWidth, getSourceHeight } from '../lib/renderer'
 
-const imgCache = new Map<string, HTMLImageElement>()
+const LRU_MAX = 20
+
+class LruCache<K, V> {
+  _map = new Map<K, V>()
+  _maxSize: number
+  constructor(maxSize: number) {
+    this._maxSize = maxSize
+  }
+
+  get(key: K): V | undefined {
+    const val = this._map.get(key)
+    if (val !== undefined) {
+      this._map.delete(key)
+      this._map.set(key, val)
+    }
+    return val
+  }
+
+  set(key: K, val: V): void {
+    this._map.delete(key)
+    this._map.set(key, val)
+    if (this._map.size > this._maxSize) {
+      const first = this._map.keys().next().value
+      this._map.delete(first!)
+    }
+  }
+
+  clear(): void {
+    this._map.clear()
+  }
+}
+
+const imgCache = new LruCache<string, HTMLImageElement>(LRU_MAX)
 
 export function clearImgCache() {
   imgCache.clear()
