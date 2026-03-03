@@ -32,6 +32,7 @@ export function useCanvas(
   const pendingPanRef = useRef<PanState | null>(null)
   const contentDimsRef = useRef<{ natW: number; natH: number } | null>(null)
   const imagesRef = useRef<{ imgOld: ImageSource; imgNew: ImageSource } | null>(null)
+  const lastResetTokenRef = useRef(useDiffStore.getState()._panResetToken)
 
   // ─── Hi-res overlay (needs panRef) ───
 
@@ -65,11 +66,16 @@ export function useCanvas(
 
   useEffect(() => {
     if (images) {
-      // New images loaded — update ref, invalidate caches, render, reset pan
+      // New images loaded — update ref, invalidate caches, render
       imagesRef.current = images
       invalidateCaches()
       renderFrame()
-      panRef.current = { x: 0, y: 0 }
+      // Only reset pan when the reset token has changed (new compare, schematic switch, tab switch)
+      const currentToken = useDiffStore.getState()._panResetToken
+      if (currentToken !== lastResetTokenRef.current) {
+        lastResetTokenRef.current = currentToken
+        panRef.current = { x: 0, y: 0 }
+      }
       applyPan()
     } else {
       // No content — clear everything

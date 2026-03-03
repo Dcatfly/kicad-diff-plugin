@@ -1,7 +1,6 @@
 import { useDiffStore } from '../stores/useDiffStore'
 import { useTranslation } from '../lib/i18n'
 import Slider from './Slider'
-import { ZOOM_MIN, ZOOM_MAX } from '../lib/constants'
 import type { ViewMode } from '../types'
 
 export default function Toolbar() {
@@ -10,22 +9,19 @@ export default function Toolbar() {
   const fade = useDiffStore((s) => s.fade)
   const thresh = useDiffStore((s) => s.thresh)
   const overlay = useDiffStore((s) => s.overlay)
-  const zoom = useDiffStore((s) => s.zoom)
   const bgColor = useDiffStore((s) => s.bgColor)
   const setViewMode = useDiffStore((s) => s.setViewMode)
   const setRawMode = useDiffStore((s) => s.setRawMode)
   const setFade = useDiffStore((s) => s.setFade)
   const setThresh = useDiffStore((s) => s.setThresh)
   const setOverlay = useDiffStore((s) => s.setOverlay)
-  const setZoom = useDiffStore((s) => s.setZoom)
   const setBgColor = useDiffStore((s) => s.setBgColor)
   const t = useTranslation()
 
+  const isDiff = viewMode === 'diff'
   const isSide = viewMode === 'side'
   const isOverlay = viewMode === 'overlay'
-  const showFade = !isOverlay && !(isSide && rawMode)
   const showThresh = !(isSide && rawMode)
-  const showOverlay = isOverlay
 
   const modes: { mode: ViewMode; label: string }[] = [
     { mode: 'diff', label: t('modeDiff') },
@@ -34,8 +30,8 @@ export default function Toolbar() {
   ]
 
   return (
-    <div className="flex items-center gap-3 px-4 py-1.5 bg-bg-panel border-b border-border text-xs flex-wrap">
-      {/* Mode buttons */}
+    <div className="flex items-center gap-3 px-4 py-1.5 bg-bg-panel border-b border-border text-xs">
+      {/* Area 1: Mode selection */}
       <div className="flex items-center gap-1">
         {modes.map(({ mode, label }) => (
           <button
@@ -52,48 +48,48 @@ export default function Toolbar() {
         ))}
       </div>
 
-      {/* Raw toggle (side mode only) */}
-      {isSide && (
-        <button
-          onClick={() => setRawMode(!rawMode)}
-          className={`px-2.5 py-1 rounded text-xs transition-colors ${
-            rawMode
-              ? 'bg-accent text-white'
-              : 'bg-bg-deep text-text-secondary hover:text-text-primary border border-border'
-          }`}
-        >
-          {t('rawOnly')}
-        </button>
-      )}
+      {/* Area 2: Mode-specific controls (fixed min-width) */}
+      <div className="flex items-center gap-3">
+        {isDiff && (
+          <Slider label={t('bgFade')} value={fade} min={0} max={100} suffix="%" onChange={setFade} />
+        )}
+        {isSide && (
+          <>
+            <label className="flex items-center gap-1.5 text-text-secondary whitespace-nowrap cursor-pointer select-none">
+              <input
+                type="checkbox"
+                checked={rawMode}
+                onChange={(e) => setRawMode(e.target.checked)}
+                className="accent-accent"
+              />
+              {t('rawOnly')}
+            </label>
+            <Slider label={t('bgFade')} value={fade} min={0} max={100} suffix="%" onChange={setFade} disabled={rawMode} />
+          </>
+        )}
+        {isOverlay && (
+          <Slider label={t('opacity')} value={overlay} min={0} max={100} suffix="%" onChange={setOverlay} />
+        )}
+      </div>
 
-      {/* Separating divider */}
-      <div className="w-px h-5 bg-border" />
+      {/* Separator */}
+      <div className="w-px h-5 bg-text-secondary/30 flex-shrink-0" />
 
-      {/* Background color */}
-      <label className="flex items-center gap-1.5 text-text-secondary whitespace-nowrap">
-        {t('paperColor')}
-        <input
-          type="color"
-          value={bgColor}
-          onChange={(e) => setBgColor(e.target.value)}
-          className="w-6 h-6 rounded cursor-pointer border border-border bg-transparent"
-        />
-      </label>
-
-      {/* Sliders */}
-      {showFade && (
-        <Slider label={t('bgFade')} value={fade} min={0} max={100} suffix="%" onChange={setFade} />
-      )}
-
-      {showThresh && (
-        <Slider label={t('noiseFilter')} value={thresh} min={1} max={80} onChange={setThresh} />
-      )}
-
-      {showOverlay && (
-        <Slider label={t('opacity')} value={overlay} min={0} max={100} suffix="%" onChange={setOverlay} />
-      )}
-
-      <Slider label={t('zoom')} value={zoom} min={ZOOM_MIN} max={ZOOM_MAX} suffix="%" onChange={setZoom} />
+      {/* Area 3: Common controls */}
+      <div className="flex items-center gap-3">
+        <label className="flex items-center gap-1.5 text-text-secondary whitespace-nowrap">
+          {t('paperColor')}
+          <input
+            type="color"
+            value={bgColor}
+            onChange={(e) => setBgColor(e.target.value)}
+            className="w-6 h-6 rounded cursor-pointer border border-border bg-transparent"
+          />
+        </label>
+        {showThresh && (
+          <Slider label={t('noiseFilter')} value={thresh} min={1} max={80} onChange={setThresh} />
+        )}
+      </div>
     </div>
   )
 }

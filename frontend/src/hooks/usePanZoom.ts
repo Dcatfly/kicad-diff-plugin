@@ -93,13 +93,15 @@ export function usePanZoom(
     if (!container) return
 
     const onMouseDown = (e: MouseEvent) => {
-      if (e.button !== 0) return
+      if (e.button !== 0 && e.button !== 2) return
       isDraggingRef.current = true
       panStartRef.current = { x: e.clientX, y: e.clientY }
       savedPanRef.current = { x: panRef.current.x, y: panRef.current.y }
       container.style.cursor = 'grabbing'
     }
 
+    const onContextMenu = (e: Event) => { e.preventDefault() }
+    container.addEventListener('contextmenu', onContextMenu)
     container.addEventListener('mousedown', onMouseDown)
 
     const onMouseMove = (e: MouseEvent) => {
@@ -134,6 +136,7 @@ export function usePanZoom(
     window.addEventListener('mouseup', onMouseUp)
 
     return () => {
+      container.removeEventListener('contextmenu', onContextMenu)
       container.removeEventListener('mousedown', onMouseDown)
       window.removeEventListener('mousemove', onMouseMove)
       window.removeEventListener('mouseup', onMouseUp)

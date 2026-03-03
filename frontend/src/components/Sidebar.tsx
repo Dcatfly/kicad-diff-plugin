@@ -1,6 +1,7 @@
 import { useMemo } from 'react'
 import { useDiffStore } from '../stores/useDiffStore'
 import { useTranslation } from '../lib/i18n'
+import { KICAD_LAYER_ORDER, KICAD_LAYER_INDEX } from '../lib/constants'
 import type { SidebarTab } from '../types'
 
 function ChangeDot({ hasChanges }: { hasChanges: boolean | null }) {
@@ -109,12 +110,16 @@ function SelectableList({
   )
 }
 
-/** Sort items: changed first, then alphabetical within each group. */
+/** Sort items: changed first, then by KiCad layer order (PCB) or alphabetical (Sch). */
 function sortByChanges(items: SelectableListItem[]): SelectableListItem[] {
+  const maxIdx = KICAD_LAYER_ORDER.length
   return [...items].sort((a, b) => {
     const ac = a.hasChanges === true ? 0 : 1
     const bc = b.hasChanges === true ? 0 : 1
     if (ac !== bc) return ac - bc
+    const ai = KICAD_LAYER_INDEX[a.label] ?? maxIdx
+    const bi = KICAD_LAYER_INDEX[b.label] ?? maxIdx
+    if (ai !== bi) return ai - bi
     return a.label.localeCompare(b.label)
   })
 }

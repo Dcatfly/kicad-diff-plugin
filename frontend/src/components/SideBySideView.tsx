@@ -72,7 +72,7 @@ export default function SideBySideView() {
       </div>
 
       {/* Divider */}
-      <div className="w-px bg-border cursor-col-resize flex-shrink-0" />
+      <div className="w-0.5 bg-text-secondary/30 flex-shrink-0" />
 
       {/* Right panel */}
       <div

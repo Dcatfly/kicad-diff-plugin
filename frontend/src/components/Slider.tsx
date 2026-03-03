@@ -7,10 +7,11 @@ interface SliderProps {
   min: number
   max: number
   suffix?: string
+  disabled?: boolean
   onChange: (value: number) => void
 }
 
-export default function Slider({ label, value, min, max, suffix = '', onChange }: SliderProps) {
+export default function Slider({ label, value, min, max, suffix = '', disabled, onChange }: SliderProps) {
   const latestRef = useRef(value)
 
   const [scheduleFlush] = useRafScheduler(() => {
@@ -23,7 +24,7 @@ export default function Slider({ label, value, min, max, suffix = '', onChange }
   }, [scheduleFlush])
 
   return (
-    <div className="flex items-center gap-2">
+    <div className={`flex items-center gap-2${disabled ? ' opacity-40 pointer-events-none' : ''}`}>
       <span className="text-xs text-text-secondary whitespace-nowrap">{label}</span>
       <input
         type="range"
@@ -31,6 +32,7 @@ export default function Slider({ label, value, min, max, suffix = '', onChange }
         max={max}
         value={value}
         onChange={handleChange}
+        disabled={disabled}
         className="w-24"
       />
       <span className="text-xs text-text-secondary w-10 text-right tabular-nums">

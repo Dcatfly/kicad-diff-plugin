@@ -55,6 +55,9 @@ interface DiffState {
   _schAutoSelectDone: boolean
   _pcbAutoSelectDone: boolean
 
+  // Pan reset token: incremented when viewport should reset (e.g. new compare, switch schematic/tab)
+  _panResetToken: number
+
   // Versions
   pluginVersion: string
   versionData: VersionData | null
@@ -101,14 +104,14 @@ export const useDiffStore = create<DiffState>((set, get) => ({
 
   // Sidebar
   sidebarTab: 'pcb',
-  setSidebarTab: (tab) => set({ sidebarTab: tab, _schAutoSelectDone: true, _pcbAutoSelectDone: true }),
+  setSidebarTab: (tab) => set((s) => ({ sidebarTab: tab, _schAutoSelectDone: true, _pcbAutoSelectDone: true, _panResetToken: s._panResetToken + 1 })),
 
   // Schematics
   schematicKeys: [],
   schematics: {},
   activeSchematicKey: '',
   setActiveSchematicKey: (key) =>
-    set({ activeSchematicKey: key, _schAutoSelectDone: true }),
+    set((s) => ({ activeSchematicKey: key, _schAutoSelectDone: true, _panResetToken: s._panResetToken + 1 })),
   updateSchematicChanges: (key, hasChanges) =>
     set((s) => {
       const sch = s.schematics[key]
@@ -183,6 +186,9 @@ export const useDiffStore = create<DiffState>((set, get) => ({
   // Smart default tracking: set to true once initial auto-selection completes
   _schAutoSelectDone: false,
   _pcbAutoSelectDone: false,
+
+  // Pan reset token
+  _panResetToken: 0,
 
   // Versions
   pluginVersion: '',
@@ -326,7 +332,7 @@ export const useDiffStore = create<DiffState>((set, get) => ({
         return
       }
 
-      set({
+      set((s) => ({
         // Schematics
         schematicKeys: schKeys,
         schematics: schFiles,
@@ -345,10 +351,13 @@ export const useDiffStore = create<DiffState>((set, get) => ({
         _schAutoSelectDone: false,
         _pcbAutoSelectDone: false,
 
+        // Reset viewport
+        _panResetToken: s._panResetToken + 1,
+
         exportStatus: { key: 'ready', oldCached: oldResult.cached, newCached: newResult.cached },
         loading: false,
         comparing: false,
-      })
+      }))
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)
       set({
