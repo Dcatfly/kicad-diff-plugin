@@ -83,6 +83,8 @@ class DiffRequestHandler(BaseHTTPRequestHandler):
 
     # These are set by the factory below
     _repo_root: Path
+    _board_dir: Path
+    _project_name: str
     _output_dir: str
     _kicad_cli: str
     _export_locks: dict[str, threading.Lock]
@@ -96,7 +98,8 @@ class DiffRequestHandler(BaseHTTPRequestHandler):
             self._send_json({
                 "ok": True,
                 "updatedAt": utc_now_iso(),
-                "boardDir": str(self._repo_root),
+                "boardDir": str(self._board_dir),
+                "projectName": self._project_name,
             })
         elif path == "/api/versions":
             self._handle_versions()
@@ -125,7 +128,7 @@ class DiffRequestHandler(BaseHTTPRequestHandler):
 
     def _handle_versions(self) -> None:
         try:
-            versions = get_versions(self._repo_root)
+            versions = get_versions(self._repo_root, board_dir=self._board_dir)
             versions["plugin_version"] = PLUGIN_VERSION
             self._send_json(versions)
         except Exception as e:
@@ -167,6 +170,8 @@ class DiffRequestHandler(BaseHTTPRequestHandler):
             with ref_lock:
                 result, cached = export_for_ref(
                     actual_ref, self._repo_root, self._output_dir, self._kicad_cli,
+                    board_dir=self._board_dir,
+                    project_name=self._project_name,
                 )
             self._send_json({
                 "status": "ok",
@@ -268,6 +273,8 @@ def _make_handler_class(
     repo_root: Path,
     output_dir: str,
     kicad_cli: str,
+    board_dir: Path | None = None,
+    project_name: str = "",
 ) -> type[DiffRequestHandler]:
     """Create a handler class with bound configuration."""
     return type(
@@ -275,6 +282,8 @@ def _make_handler_class(
         (DiffRequestHandler,),
         {
             "_repo_root": repo_root,
+            "_board_dir": board_dir or repo_root,
+            "_project_name": project_name,
             "_output_dir": output_dir,
             "_kicad_cli": kicad_cli,
             "_export_locks": {},
@@ -323,6 +332,11 @@ def parse_args() -> argparse.Namespace:
         help="KiCad project directory (default: $KICAD_DIFF_BOARD_DIR or cwd)",
     )
     parser.add_argument(
+        "--project-name",
+        default="",
+        help="KiCad project name (stem of .kicad_pro file) to scope exports",
+    )
+    parser.add_argument(
         "--watch-pid",
         default=0,
         type=int,
@@ -340,18 +354,25 @@ def main() -> int:
     args = parse_args()
     pid_file = Path(args.pid_file).resolve() if args.pid_file else None
     board_dir = args.board_dir or os.getcwd()
+    project_name = args.project_name or ""
+    board_dir_path = Path(board_dir).resolve()
 
     repo_root = find_repo_root(board_dir)
     kicad_cli = find_kicad_cli()
     output_dir = tempfile.mkdtemp(prefix="kicad-diff-")
 
-    logger.info("Plugin dir: %s", PLUGIN_DIR)
-    logger.info("Repo root:  %s", repo_root)
-    logger.info("kicad-cli:  %s", kicad_cli)
-    logger.info("Output dir: %s", output_dir)
-    logger.info("Board dir:  %s", board_dir)
+    logger.info("Plugin dir:    %s", PLUGIN_DIR)
+    logger.info("Repo root:     %s", repo_root)
+    logger.info("kicad-cli:     %s", kicad_cli)
+    logger.info("Output dir:    %s", output_dir)
+    logger.info("Board dir:     %s", board_dir)
+    logger.info("Project name:  %s", project_name or "(all)")
 
-    handler_class = _make_handler_class(repo_root, output_dir, kicad_cli)
+    handler_class = _make_handler_class(
+        repo_root, output_dir, kicad_cli,
+        board_dir=board_dir_path,
+        project_name=project_name,
+    )
     server = ThreadingHTTPServer((args.host, args.port), handler_class)
 
     if pid_file is not None:

@@ -141,7 +141,7 @@ def _parse_commit_line(line: str) -> dict | None:
     }
 
 
-def get_versions(repo_root: Path) -> dict:
+def get_versions(repo_root: Path, board_dir: Path | None = None) -> dict:
     """Get git commit history grouped by branch."""
     current_branch = ""
     try:
@@ -182,6 +182,20 @@ def get_versions(repo_root: Path) -> dict:
         logger.warning("Failed to list remote branches: %s", e.stderr.strip() if e.stderr else e)
         remote_branches = []
 
+    # Compute git pathspecs to scope version list to KiCad files only.
+    # Use :(glob) magic pathspec so '**' matches across directories.
+    if board_dir is not None and board_dir.resolve() != repo_root.resolve():
+        try:
+            rel_dir = str(board_dir.resolve().relative_to(repo_root.resolve())).replace("\\", "/")
+            path_filter = [
+                f":(glob){rel_dir}/**/*.kicad_sch",
+                f":(glob){rel_dir}/**/*.kicad_pcb",
+            ]
+        except ValueError:
+            path_filter = ["*.kicad_sch", "*.kicad_pcb"]
+    else:
+        path_filter = ["*.kicad_sch", "*.kicad_pcb"]
+
     ordered: list[str] = []
     if current_branch:
         ordered.append(current_branch)
@@ -197,8 +211,7 @@ def get_versions(repo_root: Path) -> dict:
     for branch in ordered:
         try:
             result = subprocess.run(
-                ["git", "log", branch, "--format=%H|%h|%s|%D|%ar", "--",
-                 "*.kicad_sch", "*.kicad_pcb"],
+                ["git", "log", branch, "--format=%H|%h|%s|%D|%ar", "--"] + path_filter,
                 capture_output=True, encoding="utf-8", check=True, cwd=repo_root,
                 **_SUBPROCESS_KWARGS,
             )
@@ -408,6 +421,8 @@ def export_for_ref(
     repo_root: Path,
     output_dir: str,
     kicad_cli: str,
+    board_dir: Path | None = None,
+    project_name: str = "",
 ) -> tuple[dict, bool]:
     """Export all KiCad files for a given ref.
 
@@ -439,16 +454,44 @@ def export_for_ref(
     try:
         project_root = Path(tmp_dir) if tmp_dir else repo_root
 
+        # Determine scan directory (limit to board_dir subdirectory if applicable)
+        if board_dir is not None and board_dir.resolve() != repo_root.resolve():
+            try:
+                rel_board = board_dir.resolve().relative_to(repo_root.resolve())
+            except ValueError:
+                rel_board = Path(".")
+            scan_root = project_root / rel_board
+        else:
+            scan_root = project_root
+
+        if not scan_root.exists():
+            logger.warning("Scan root does not exist for ref=%s: %s", ref, scan_root)
+            if not is_working:
+                complete_marker.touch()
+            return build_structured_result(out_dir, output_dir), False
+
         # Find root schematic stems (those with matching .kicad_pro)
         root_sch_stems: set[str] = set()
-        for p in project_root.rglob("*.kicad_pro"):
+        for p in scan_root.rglob("*.kicad_pro"):
             root_sch_stems.add(p.stem)
+
+        # If a specific project name is given, try to restrict to that project.
+        # Only override when the board stem matches a known .kicad_pro; otherwise
+        # keep the .kicad_pro-derived stems so the real root schematic is not
+        # accidentally filtered out (board and project may have different stems).
+        if project_name:
+            if project_name in root_sch_stems:
+                root_sch_stems = {project_name}
+            else:
+                root_sch_stems.add(project_name)
 
         kicad_files: list[str] = []
         for ext in KICAD_EXTENSIONS:
-            for p in project_root.rglob(f"*{ext}"):
+            for p in scan_root.rglob(f"*{ext}"):
                 rel = p.relative_to(project_root)
                 if ext == ".kicad_sch" and root_sch_stems and p.stem not in root_sch_stems:
+                    continue
+                if ext == ".kicad_pcb" and project_name and p.stem != project_name:
                     continue
                 kicad_files.append(str(rel))
         kicad_files.sort()

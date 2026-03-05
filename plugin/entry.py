@@ -27,18 +27,19 @@ SERVER_SCRIPT = PLUGIN_DIR / "server.py"
 
 # ── Per-project port derivation ──────────────────────────────────────
 
-def _stable_port_for_project(board_dir: str) -> int:
-    """Map *board_dir* deterministically to a TCP port in 20000-39999."""
-    digest = hashlib.sha1(board_dir.encode("utf-8")).digest()
+def _stable_port_for_project(board_dir: str, project_name: str = "") -> int:
+    """Map *board_dir* + *project_name* deterministically to a TCP port in 20000-39999."""
+    key = f"{board_dir}:{project_name}" if project_name else board_dir
+    digest = hashlib.sha1(key.encode("utf-8")).digest()
     return 20000 + (int.from_bytes(digest[:4], "big") % 20000)
 
 
-def _resolve_port(board_dir: str) -> int:
+def _resolve_port(board_dir: str, project_name: str = "") -> int:
     """Return the port to use.  Env-var override wins, else hash-derived."""
     env_port = os.environ.get("KICAD_DIFF_PLUGIN_PORT", "")
     if env_port:
         return int(env_port)
-    return _stable_port_for_project(board_dir)
+    return _stable_port_for_project(board_dir, project_name)
 
 
 def _pid_file(port: int) -> Path:
@@ -257,7 +258,7 @@ def _truncate_log_if_needed(
 
 # ── Server lifecycle ─────────────────────────────────────────────────
 
-def _restart_server(port: int, board_dir: str) -> bool:
+def _restart_server(port: int, board_dir: str, project_name: str = "") -> bool:
     if _is_server_up(port):
         _request_shutdown(port)
         _wait_until_server_down(port, SHUTDOWN_TIMEOUT_SECONDS)
@@ -274,7 +275,7 @@ def _restart_server(port: int, board_dir: str) -> bool:
             return False
 
     _clear_pid_file(port)
-    return _start_server(port, board_dir)
+    return _start_server(port, board_dir, project_name)
 
 
 def _detached_popen_kwargs() -> dict[str, int | bool]:
@@ -290,7 +291,7 @@ def _detached_popen_kwargs() -> dict[str, int | bool]:
     return kwargs
 
 
-def _start_server(port: int, board_dir: str) -> bool:
+def _start_server(port: int, board_dir: str, project_name: str = "") -> bool:
     if not SERVER_SCRIPT.exists():
         print(f"Server script not found: {SERVER_SCRIPT}")
         return False
@@ -300,6 +301,7 @@ def _start_server(port: int, board_dir: str) -> bool:
     _truncate_log_if_needed(log)
 
     _write_entry_log(log, f"Board dir: {board_dir}")
+    _write_entry_log(log, f"Project name: {project_name or '(all)'}")
     _write_entry_log(log, f"Port: {port}")
     _write_entry_log(log, f"Python: {sys.executable}")
     _write_entry_log(log, f"Platform: {sys.platform}, os.name={os.name}")
@@ -320,6 +322,8 @@ def _start_server(port: int, board_dir: str) -> bool:
         "--board-dir",
         board_dir,
     ]
+    if project_name:
+        command.extend(["--project-name", project_name])
     if kicad_pid is not None:
         command.extend(["--watch-pid", str(kicad_pid)])
 
@@ -486,8 +490,12 @@ def _open_browser(url: str) -> bool:
 
 # ── KiCad integration ────────────────────────────────────────────────
 
-def _get_board_dir_from_kicad() -> str | None:
-    """Try to get the board directory from KiCad via IPC."""
+def _get_board_info_from_kicad() -> tuple[str, str] | None:
+    """Try to get the board directory and project name from KiCad via IPC.
+
+    Returns (board_dir, project_name) or None.
+    project_name is the stem of the board file (e.g. 'MyBoard' from 'MyBoard.kicad_pcb').
+    """
     try:
         import kipy
         from kipy.proto.common.types import DocumentType
@@ -510,22 +518,30 @@ def _get_board_dir_from_kicad() -> str | None:
         if not docs:
             return None
 
-        doc = docs[0]
+        # Take the last document — when KiCad reports multiple open PCBs,
+        # the most recently opened one is typically the active project.
+        doc = docs[-1]
+
+        # Extract project name from board filename
+        project_name = ""
+        board_file = str(getattr(doc, "board_filename", ""))
+        if board_file:
+            project_name = Path(board_file).stem
+
         project = getattr(doc, "project", None)
         if project:
             project_path = str(getattr(project, "path", ""))
             if project_path and Path(project_path).is_dir():
-                return project_path
+                return (project_path, project_name)
 
-        board_file = str(getattr(doc, "board_filename", ""))
         if board_file:
             board_path = Path(board_file)
             if board_path.is_absolute() and board_path.exists():
-                return str(board_path.parent)
+                return (str(board_path.parent), project_name)
 
         return None
     except Exception as e:
-        print(f"[kicad-diff] Failed to get board dir from KiCad IPC: {e}")
+        print(f"[kicad-diff] Failed to get board info from KiCad IPC: {e}")
         return None
 
 
@@ -560,31 +576,50 @@ def _get_kicad_pid(log_path: Path | None = None) -> int | None:
     return None
 
 
-def _resolve_board_dir() -> str:
-    """Determine board directory: KiCad IPC → env var → cwd."""
+def _resolve_board_info() -> tuple[str, str]:
+    """Determine board directory and project name.
+
+    Returns (board_dir, project_name).  project_name may be empty when the
+    board file cannot be determined (e.g. env-var / cwd fallback).
+    """
     board_dir = os.environ.get("KICAD_DIFF_BOARD_DIR", "")
+    project_name = ""
     if not board_dir:
-        board_dir = _get_board_dir_from_kicad() or ""
+        result = _get_board_info_from_kicad()
+        if result:
+            board_dir, project_name = result
     if not board_dir:
         board_dir = os.getcwd()
-    return board_dir
+    return board_dir, project_name
 
 
 # ── Entry point ──────────────────────────────────────────────────────
 
 def main() -> int:
-    board_dir = _resolve_board_dir()
-    port = _resolve_port(board_dir)
+    board_dir, project_name = _resolve_board_info()
+    port = _resolve_port(board_dir, project_name)
     url = _dashboard_url(port)
 
-    if _is_server_up(port):
-        print(f"[kicad-diff] Server already running on port {port}, opening browser")
-        if not _open_browser(url):
-            print(f"Failed to open browser automatically. Open this URL manually: {url}")
-            return 1
-        return 0
+    # Check if a server is already running on this port
+    health = _get_server_health(port)
+    if health is not None:
+        # Verify the running server is for the same project
+        remote_board = health.get("boardDir", "")
+        remote_project = health.get("projectName", "")
+        same_project = (
+            (not remote_board or Path(remote_board).resolve() == Path(board_dir).resolve())
+            and remote_project == project_name
+        )
+        if same_project:
+            print(f"[kicad-diff] Server already running on port {port}, opening browser")
+            if not _open_browser(url):
+                print(f"Failed to open browser automatically. Open this URL manually: {url}")
+                return 1
+            return 0
+        # Different project on same port (hash collision or stale) — restart
+        print(f"[kicad-diff] Restarting server on port {port} (project changed)")
 
-    if not _restart_server(port, board_dir):
+    if not _restart_server(port, board_dir, project_name):
         return 1
 
     ready = _wait_for_server(port)
