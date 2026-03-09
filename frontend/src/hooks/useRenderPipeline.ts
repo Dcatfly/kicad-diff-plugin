@@ -9,6 +9,7 @@ import {
   DPR,
   getNaturalDimensions,
   applyZoom,
+  detectDominantColor,
 } from '../lib/renderer'
 import { GLRenderer, ensureGL } from '../lib/glRenderer'
 import { useRafScheduler } from '../lib/scheduling'
@@ -72,6 +73,12 @@ export function useRenderPipeline({
         rendL.uploadSingle(imgOld, pw, ph)
         rendR.uploadSingle(imgNew, pw, ph)
       } else {
+        // Detect dominant fill colours (cached — zero cost on slider drags)
+        const domOld = detectDominantColor(imgOld)
+        const domNew = detectDominantColor(imgNew)
+        rendL.setDominantColors(domOld, domNew)
+        rendR.setDominantColors(domOld, domNew)
+
         rendL.uploadPair(imgOld, imgNew, pw, ph)
         rendR.uploadPair(imgOld, imgNew, pw, ph)
       }
@@ -97,6 +104,12 @@ export function useRenderPipeline({
       if (!cvs) return
 
       const rend = ensureGL(glRef, cvs)
+
+      // Detect dominant fill colours (cached — zero cost on slider drags)
+      const domOld = detectDominantColor(imgOld)
+      const domNew = detectDominantColor(imgNew)
+      rend.setDominantColors(domOld, domNew)
+
       rend.uploadPair(imgOld, imgNew, pw, ph)
       rend.setSize(pw, ph)
       rend.resetViewport()

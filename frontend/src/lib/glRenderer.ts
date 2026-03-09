@@ -13,7 +13,8 @@
 //   └── context loss / restore handling
 
 import type { ImageSource } from './renderer'
-import { FADE_BG, LAYER_ALPHA } from './constants'
+import { FADE_BG, LAYER_ALPHA, DOM_COLOR_MATCH_THRESH } from './constants'
+import type { DominantColor } from './renderer'
 
 // ─── Shader sources ───
 
@@ -62,6 +63,17 @@ uniform float u_thresh;
 uniform float u_fadeAlpha;
 uniform vec3 u_bgColor;
 uniform vec3 u_fadeBg;
+uniform vec3 u_domOld;
+uniform vec3 u_domNew;
+uniform float u_hasDomOld;
+uniform float u_hasDomNew;
+uniform float u_domThresh;
+
+bool isDominant(vec3 c, vec3 dom, float hasDom) {
+  if (hasDom < 0.5) return false;
+  float d = max(max(abs(c.r - dom.r), abs(c.g - dom.g)), abs(c.b - dom.b));
+  return d < u_domThresh;
+}
 
 void main() {
   vec4 cOld = texture2D(u_texOld, v_uv);
@@ -77,11 +89,28 @@ void main() {
     max(abs(pOld.b - pNew.b), abs(cOld.a - cNew.a))
   );
 
+  // Classify each side
+  bool oldTransp = cOld.a < 0.004;
+  bool newTransp = cNew.a < 0.004;
+  bool oldDom = !oldTransp && isDominant(cOld.rgb, u_domOld, u_hasDomOld);
+  bool newDom = !newTransp && isDominant(cNew.rgb, u_domNew, u_hasDomNew);
+  bool oldBlank = oldTransp || oldDom;
+  bool newBlank = newTransp || newDom;
+
   vec3 result;
   if (diff > u_thresh) {
-    bool oldBlank = cOld.a < 0.004;
-    bool newBlank = cNew.a < 0.004;
-    if (oldBlank && !newBlank) {
+    if (oldBlank && newBlank) {
+      if (oldTransp && newDom) {
+        // Cutout filled in: old had a hole, new filled it → removed (red)
+        result = vec3(min(1.0, pOld.r * 0.5 + 0.4706), pOld.g * 0.3, pOld.b * 0.3);
+      } else if (oldDom && newTransp) {
+        // New cutout: old was fill, new has a hole → added (green)
+        result = vec3(pNew.r * 0.3, min(1.0, pNew.g * 0.5 + 0.4706), pNew.b * 0.3);
+      } else {
+        // Both transparent or both dominant → truly unchanged
+        result = mix(u_fadeBg, pNew, u_fadeAlpha);
+      }
+    } else if (oldBlank && !newBlank) {
       // Added: green tint
       result = vec3(pNew.r * 0.3, min(1.0, pNew.g * 0.5 + 0.4706), pNew.b * 0.3);
     } else if (!oldBlank && newBlank) {
@@ -162,6 +191,17 @@ uniform float u_fadeAlpha;
 uniform vec3 u_bgColor;
 uniform vec3 u_fadeBg;
 uniform float u_isOld;
+uniform vec3 u_domOld;
+uniform vec3 u_domNew;
+uniform float u_hasDomOld;
+uniform float u_hasDomNew;
+uniform float u_domThresh;
+
+bool isDominant(vec3 c, vec3 dom, float hasDom) {
+  if (hasDom < 0.5) return false;
+  float d = max(max(abs(c.r - dom.r), abs(c.g - dom.g)), abs(c.b - dom.b));
+  return d < u_domThresh;
+}
 
 void main() {
   vec4 cOld = texture2D(u_texOld, v_uv);
@@ -179,8 +219,23 @@ void main() {
     max(abs(pOld.b - pNew.b), abs(cOld.a - cNew.a))
   );
 
+  // Classify each side: transparent / dominant / real-content
+  bool oldTransp = cOld.a < 0.004;
+  bool newTransp = cNew.a < 0.004;
+  bool oldDom = !oldTransp && isDominant(cOld.rgb, u_domOld, u_hasDomOld);
+  bool newDom = !newTransp && isDominant(cNew.rgb, u_domNew, u_hasDomNew);
+
+  // "Has content" on this side:
+  //   - Opaque AND not dominant fill → real content
+  //   - Transparent BUT other side is dominant → this side's "hole" is the feature
+  bool mySideHasContent;
+  if (u_isOld > 0.5) {
+    mySideHasContent = (!oldTransp && !oldDom) || (oldTransp && newDom);
+  } else {
+    mySideHasContent = (!newTransp && !newDom) || (newTransp && oldDom);
+  }
+
   vec3 result;
-  bool mySideHasContent = sideAlpha > 0.004;
   if (diff > u_thresh && mySideHasContent) {
     if (u_isOld > 0.5) {
       // Old side: red highlight
@@ -394,6 +449,10 @@ export class GLRenderer {
   private uvOffset: [number, number] = [0, 0]
   private uvScale: [number, number] = [1, 1]
 
+  // Dominant fill-colour state (set by caller before rendering)
+  private domOld: DominantColor = null
+  private domNew: DominantColor = null
+
   // Saved sources for context restore
   private lastImgOld: ImageSource | null = null
   private lastImgNew: ImageSource | null = null
@@ -450,6 +509,7 @@ export class GLRenderer {
     this.programs.diff = buildProgram(gl, VERT_SRC, FRAG_DIFF, [
       'u_texOld', 'u_texNew', 'u_thresh', 'u_fadeAlpha',
       'u_bgColor', 'u_fadeBg', 'u_uvOffset', 'u_uvScale',
+      'u_domOld', 'u_domNew', 'u_hasDomOld', 'u_hasDomNew', 'u_domThresh',
     ])
     this.programs.overlay = buildProgram(gl, VERT_SRC, FRAG_OVERLAY, [
       'u_texOld', 'u_texNew', 'u_thresh', 'u_overlayT',
@@ -458,6 +518,7 @@ export class GLRenderer {
     this.programs.sideAnnotated = buildProgram(gl, VERT_SRC, FRAG_SIDE_ANNOTATED, [
       'u_texOld', 'u_texNew', 'u_thresh', 'u_fadeAlpha',
       'u_bgColor', 'u_fadeBg', 'u_isOld', 'u_uvOffset', 'u_uvScale',
+      'u_domOld', 'u_domNew', 'u_hasDomOld', 'u_hasDomNew', 'u_domThresh',
     ])
     this.programs.raw = buildProgram(gl, VERT_SRC, FRAG_RAW, [
       'u_tex', 'u_bgColor', 'u_uvOffset', 'u_uvScale',
@@ -783,6 +844,36 @@ export class GLRenderer {
   // ─── Public render methods ───
 
   /**
+   * Set dominant (fill-area) colours detected from old/new images.
+   * Called before renderDiff / renderSideAnnotated so the shaders can
+   * treat these colours as background.
+   */
+  setDominantColors(domOld: DominantColor, domNew: DominantColor): void {
+    this.domOld = domOld
+    this.domNew = domNew
+  }
+
+  /** Apply dominant-colour uniforms shared by diff and sideAnnotated programs. */
+  private applyDomUniforms(info: ProgramInfo): void {
+    const gl = this.gl!
+    if (this.domOld) {
+      gl.uniform3f(info.uniforms.u_domOld, this.domOld[0], this.domOld[1], this.domOld[2])
+      gl.uniform1f(info.uniforms.u_hasDomOld, 1.0)
+    } else {
+      gl.uniform3f(info.uniforms.u_domOld, 0, 0, 0)
+      gl.uniform1f(info.uniforms.u_hasDomOld, 0.0)
+    }
+    if (this.domNew) {
+      gl.uniform3f(info.uniforms.u_domNew, this.domNew[0], this.domNew[1], this.domNew[2])
+      gl.uniform1f(info.uniforms.u_hasDomNew, 1.0)
+    } else {
+      gl.uniform3f(info.uniforms.u_domNew, 0, 0, 0)
+      gl.uniform1f(info.uniforms.u_hasDomNew, 0.0)
+    }
+    gl.uniform1f(info.uniforms.u_domThresh, DOM_COLOR_MATCH_THRESH)
+  }
+
+  /**
    * Render in diff mode.
    *
    * @param thresh  - Pixel difference threshold (0-255)
@@ -801,6 +892,8 @@ export class GLRenderer {
     gl.uniform1f(info.uniforms.u_fadeAlpha, 1 - fade / 100)
     gl.uniform3f(info.uniforms.u_bgColor, bgR, bgG, bgB)
     gl.uniform3f(info.uniforms.u_fadeBg, FADE_BG_NORM[0], FADE_BG_NORM[1], FADE_BG_NORM[2])
+
+    this.applyDomUniforms(info)
 
     this.draw()
   }
@@ -848,6 +941,8 @@ export class GLRenderer {
     gl.uniform3f(info.uniforms.u_bgColor, bgR, bgG, bgB)
     gl.uniform3f(info.uniforms.u_fadeBg, FADE_BG_NORM[0], FADE_BG_NORM[1], FADE_BG_NORM[2])
     gl.uniform1f(info.uniforms.u_isOld, isOld ? 1.0 : 0.0)
+
+    this.applyDomUniforms(info)
 
     this.draw()
   }

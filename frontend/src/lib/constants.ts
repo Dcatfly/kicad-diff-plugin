@@ -54,3 +54,8 @@ export const FADE_BG: [number, number, number] = [15, 15, 35]
 export const HI_RES_DEBOUNCE_MS = 150
 export const CHANGE_DETECT_SAMPLE_SIZE = 128
 export const LAYER_ALPHA = 0.4
+
+// Dominant-colour detection (fill-area background)
+export const DOM_COLOR_SAMPLE_SIZE = 64
+export const DOM_COLOR_AREA_THRESH = 0.20
+export const DOM_COLOR_MATCH_THRESH = 0.10

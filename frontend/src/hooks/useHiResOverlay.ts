@@ -6,6 +6,7 @@ import { useCallback, useEffect, useRef } from 'react'
 import { useDiffStore } from '../stores/useDiffStore'
 import type { ImageSource } from '../lib/renderer'
 import { DPR } from '../lib/renderer'
+import { detectDominantColor } from '../lib/renderer'
 import { GLRenderer, ensureGL } from '../lib/glRenderer'
 import { HI_RES_DEBOUNCE_MS } from '../lib/constants'
 import { useDebounceScheduler } from '../lib/scheduling'
@@ -107,6 +108,12 @@ export function useHiResOverlay({
       layoutCanvas(hiResRef.current)
 
       const gl = ensureGL(hiResGlRef, hiResRef.current)
+
+      // Detect dominant fill colours (cached — hits WeakMap from renderFrame)
+      const domOld = detectDominantColor(images.imgOld)
+      const domNew = detectDominantColor(images.imgNew)
+      gl.setDominantColors(domOld, domNew)
+
       gl.uploadPairRegion(images.imgOld, images.imgNew, cx0, cy0, cw, ch, vpPw, vpPh)
       gl.setSize(vpPw, vpPh)
       gl.resetViewport()
@@ -128,6 +135,12 @@ export function useHiResOverlay({
         glL.uploadSingleRegion(images.imgOld, cx0, cy0, cw, ch, vpPw, vpPh)
         glR.uploadSingleRegion(images.imgNew, cx0, cy0, cw, ch, vpPw, vpPh)
       } else {
+        // Detect dominant fill colours (cached — hits WeakMap from renderFrame)
+        const domOld = detectDominantColor(images.imgOld)
+        const domNew = detectDominantColor(images.imgNew)
+        glL.setDominantColors(domOld, domNew)
+        glR.setDominantColors(domOld, domNew)
+
         glL.uploadPairRegion(images.imgOld, images.imgNew, cx0, cy0, cw, ch, vpPw, vpPh)
         glR.uploadPairRegion(images.imgOld, images.imgNew, cx0, cy0, cw, ch, vpPw, vpPh)
       }
