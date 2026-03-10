@@ -16,7 +16,18 @@
       "resources": {
         "homepage": "https://github.com/Dcatfly/kicad-diff-plugin"
       },
-      "versions": []
+      "versions": [
+        {
+          "version": "1.0.0",
+          "status": "stable",
+          "kicad_version": "9.0",
+          "runtime": "ipc",
+          "download_url": "https://github.com/Dcatfly/kicad-diff-plugin/releases/download/v1.0.0/org.dcatfly.kicad-diff-plugin-1.0.0.zip",
+          "download_sha256": "a45b6f1c192c4e0c62d8f9c9adee3ea34627db0497e89ed54eb37ccc36952a2a",
+          "download_size": 101289,
+          "install_size": 317990
+        }
+      ]
     }
   ]
 }
