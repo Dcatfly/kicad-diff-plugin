@@ -1,0 +1,14 @@
+{
+  "$schema": "https://go.kicad.org/pcm/schemas/v1#/definitions/Repository",
+  "name": "Dcatfly KiCad Plugins",
+  "maintainer": {
+    "name": "dcatfly",
+    "contact": {
+      "web": "https://github.com/Dcatfly/kicad-diff-plugin"
+    }
+  },
+  "packages": {
+    "url": "https://raw.githubusercontent.com/Dcatfly/kicad-diff-plugin/pcm-repo/packages.json",
+    "update_timestamp": 0
+  }
+}

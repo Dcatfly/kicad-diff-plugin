@@ -1,0 +1,22 @@
+{
+  "packages": [
+    {
+      "name": "KiCad Diff Plugin",
+      "description": "Visual diff viewer for KiCad schematic and PCB files using git history.",
+      "description_full": "This package installs an IPC-based KiCad 9 plugin. The toolbar button starts a local Python server and opens a browser dashboard that exports SVG snapshots via kicad-cli, then renders pixel-level diffs with WebGL to compare git versions of .kicad_sch and .kicad_pcb files.",
+      "identifier": "org.dcatfly.kicad-diff-plugin",
+      "type": "plugin",
+      "author": {
+        "name": "dcatfly",
+        "contact": {
+          "web": "https://github.com/Dcatfly/"
+        }
+      },
+      "license": "GPL-3.0",
+      "resources": {
+        "homepage": "https://github.com/Dcatfly/kicad-diff-plugin"
+      },
+      "versions": []
+    }
+  ]
+}
