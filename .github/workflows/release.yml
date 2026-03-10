@@ -1,0 +1,133 @@
+name: Release Plugin
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  # ------------------------------------------------------------------ #
+  # Job 1: Build the plugin archive and create a GitHub Release.       #
+  #         No concurrency limit — every tag gets its own Release.     #
+  # ------------------------------------------------------------------ #
+  build-release:
+    runs-on: ubuntu-latest
+
+    outputs:
+      version: ${{ steps.version.outputs.value }}
+      archive-name: ${{ steps.archive.outputs.name }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Extract version from tag
+        id: version
+        run: echo "value=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - name: Install frontend dependencies
+        run: pnpm -C frontend install --frozen-lockfile
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # ---------- Build ----------
+
+      - name: Build frontend & package plugin
+        run: python3 scripts/package_plugin.py --version ${{ steps.version.outputs.value }}
+
+      - name: Identify archive
+        id: archive
+        run: |
+          ZIP_NAME="org.dcatfly.kicad-diff-plugin-${{ steps.version.outputs.value }}.zip"
+          echo "name=${ZIP_NAME}" >> "$GITHUB_OUTPUT"
+          echo "path=dist/${ZIP_NAME}" >> "$GITHUB_OUTPUT"
+
+      # ---------- GitHub Release (idempotent) ----------
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if gh release view "${{ github.ref_name }}" > /dev/null 2>&1; then
+            echo "Release ${{ github.ref_name }} already exists, uploading asset..."
+            gh release upload "${{ github.ref_name }}" \
+              "${{ steps.archive.outputs.path }}" --clobber
+          else
+            gh release create "${{ github.ref_name }}" \
+              "${{ steps.archive.outputs.path }}" \
+              --title "${{ github.ref_name }}" \
+              --generate-notes
+          fi
+
+  # ------------------------------------------------------------------ #
+  # Job 2: Update PCM metadata on the dedicated pcm-repo branch.      #
+  #         Serialised via concurrency group; newer tags cancel older.  #
+  # ------------------------------------------------------------------ #
+  update-pcm:
+    needs: build-release
+    runs-on: ubuntu-latest
+
+    concurrency:
+      group: update-pcm-metadata
+      cancel-in-progress: true
+
+    steps:
+      - name: Checkout (to access scripts)
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Download release archive
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release download "${{ github.ref_name }}" \
+            --pattern "*.zip" \
+            --dir /tmp/
+
+      # Save script before branch switch (orphan branch has no source tree)
+      - name: Save update script
+        run: cp scripts/update_pcm_metadata.py /tmp/update_pcm_metadata.py
+
+      - name: Switch to pcm-repo branch
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git fetch origin pcm-repo
+          git checkout origin/pcm-repo -B pcm-repo
+
+      - name: Update PCM repository metadata
+        run: |
+          ZIP_NAME="${{ needs.build-release.outputs.archive-name }}"
+          DOWNLOAD_URL="https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/${ZIP_NAME}"
+          python3 /tmp/update_pcm_metadata.py \
+            --version "${{ needs.build-release.outputs.version }}" \
+            --zip-path "/tmp/${ZIP_NAME}" \
+            --download-url "${DOWNLOAD_URL}" \
+            --pcm-dir .
+
+      - name: Commit and push PCM metadata
+        run: |
+          git add packages.json repository.json
+          git diff --cached --quiet && echo "No metadata changes" && exit 0
+          git commit -m "chore: update PCM metadata for ${{ github.ref_name }}"
+          git push origin pcm-repo

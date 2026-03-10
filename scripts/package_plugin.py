@@ -123,7 +123,6 @@ def create_zip(metadata: dict, version: str) -> Path:
     metadata_payload["versions"] = [first_release]
 
     identifier = str(metadata_payload["identifier"])
-    package_plugin_dir = PCM_PLUGIN_DIR / identifier
 
     DIST_DIR.mkdir(parents=True, exist_ok=True)
     archive_path = DIST_DIR / f"{identifier}-{version}.zip"
@@ -138,7 +137,8 @@ def create_zip(metadata: dict, version: str) -> Path:
             if not file_path.is_file() or should_skip(file_path):
                 continue
 
-            arcname = package_plugin_dir / file_path.relative_to(PLUGIN_DIR)
+            # PCM spec: plugin files go directly under plugins/, no sub-directory
+            arcname = PCM_PLUGIN_DIR / file_path.relative_to(PLUGIN_DIR)
             archive.write(file_path, arcname)
 
     return archive_path

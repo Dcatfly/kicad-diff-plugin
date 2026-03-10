@@ -1,24 +1,24 @@
 {
   "$schema": "https://go.kicad.org/pcm/schemas/v1",
   "name": "KiCad Diff Plugin",
-  "description": "Open a local web dashboard for the current PCB project.",
-  "description_full": "This package installs an IPC-based KiCad 9 plugin. The toolbar button starts a local Python server and opens a browser dashboard that reads PCB project information through the KiCad IPC API.",
+  "description": "Visual diff viewer for KiCad schematic and PCB files using git history.",
+  "description_full": "This package installs an IPC-based KiCad 9 plugin. The toolbar button starts a local Python server and opens a browser dashboard that exports SVG snapshots via kicad-cli, then renders pixel-level diffs with WebGL to compare git versions of .kicad_sch and .kicad_pcb files.",
   "identifier": "org.dcatfly.kicad-diff-plugin",
   "type": "plugin",
   "author": {
     "name": "dcatfly",
     "contact": {
-      "web": "https://example.com"
+      "web": "https://github.com/Dcatfly/"
     }
   },
-  "license": "MIT",
+  "license": "GPL-3.0",
   "resources": {
-    "homepage": "https://example.com"
+    "homepage": "https://github.com/Dcatfly/kicad-diff-plugin"
   },
   "versions": [
     {
       "version": "0.1.0",
-      "status": "development",
+      "status": "stable",
       "kicad_version": "9.0",
       "runtime": "ipc"
     }
