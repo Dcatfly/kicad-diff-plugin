@@ -1,6 +1,7 @@
 // ─── Zustand store: global state for the diff viewer ───
 
 import { create } from 'zustand'
+import { persist } from 'zustand/middleware'
 import type {
   ViewMode,
   Locale,
@@ -15,10 +16,12 @@ import type {
 import { fetchVersions, exportVersion } from '../lib/api'
 import {
   DEFAULT_ZOOM, DEFAULT_FADE, DEFAULT_THRESH, DEFAULT_OVERLAY, DEFAULT_BG_COLOR,
+  FADE_MIN, FADE_MAX, THRESH_MIN, THRESH_MAX, OVERLAY_MIN, OVERLAY_MAX, BG_COLOR_RE,
 } from '../lib/constants'
 import { buildFilePairs, buildLayerPairs } from '../lib/filePairing'
 import { translate } from '../lib/i18n'
 import { clearImgCache } from '../hooks/useImageLoader'
+import { readUrlRefs, writeUrlRefs } from '../lib/urlSync'
 
 interface DiffState {
   // View
@@ -92,7 +95,11 @@ interface DiffState {
 const detectInitialLocale = (): Locale =>
   (navigator.language || '').startsWith('zh') ? 'zh' : 'en'
 
-export const useDiffStore = create<DiffState>((set, get) => ({
+const VALID_VIEW_MODES: ViewMode[] = ['diff', 'side', 'overlay']
+
+export const useDiffStore = create<DiffState>()(
+  persist(
+    (set, get) => ({
   // View defaults
   viewMode: 'diff',
   rawMode: false,
@@ -212,8 +219,16 @@ export const useDiffStore = create<DiffState>((set, get) => ({
   setThresh: (thresh) => set({ thresh }),
   setOverlay: (overlay) => set({ overlay }),
   setBgColor: (bgColor) => set({ bgColor }),
-  setOldRef: (ref) => set({ oldRef: ref }),
-  setNewRef: (ref) => set({ newRef: ref }),
+  setOldRef: (ref) => {
+    const newRef = get().newRef
+    set({ oldRef: ref })
+    if (ref && newRef) writeUrlRefs(ref, newRef)
+  },
+  setNewRef: (ref) => {
+    const oldRef = get().oldRef
+    set({ newRef: ref })
+    if (oldRef && ref) writeUrlRefs(oldRef, ref)
+  },
 
   toggleLocale: () =>
     set((s) => ({ locale: s.locale === 'zh' ? 'en' : 'zh' })),
@@ -253,12 +268,27 @@ export const useDiffStore = create<DiffState>((set, get) => ({
         defaultOld = data.groups[0].commits[0].ref
       }
 
+      // Restore version selection from URL if valid
+      const urlRefs = readUrlRefs()
+      let finalOldRef = defaultOld
+      let finalNewRef = 'working'
+
+      if (urlRefs.oldRef && map[urlRefs.oldRef]) {
+        finalOldRef = urlRefs.oldRef
+      }
+      if (urlRefs.newRef && map[urlRefs.newRef]) {
+        finalNewRef = urlRefs.newRef
+      }
+
+      // Sync final valid state to URL (overwrites any invalid params)
+      writeUrlRefs(finalOldRef, finalNewRef)
+
       set({
         pluginVersion: data.plugin_version ?? '',
         versionData: data,
         versionMap: map,
-        oldRef: defaultOld,
-        newRef: 'working',
+        oldRef: finalOldRef,
+        newRef: finalNewRef,
       })
     } catch (err) {
       console.error('Failed to fetch versions:', err)
@@ -367,4 +397,40 @@ export const useDiffStore = create<DiffState>((set, get) => ({
       })
     }
   },
-}))
+    }),
+    {
+      name: 'kicad-diff-prefs',
+      version: 1,
+      partialize: (state) => ({
+        viewMode: state.viewMode,
+        rawMode: state.rawMode,
+        fade: state.fade,
+        thresh: state.thresh,
+        overlay: state.overlay,
+        bgColor: state.bgColor,
+      }),
+      merge: (persisted, current) => {
+        const p = persisted as Record<string, unknown> | undefined
+        if (!p || typeof p !== 'object') return current
+        return {
+          ...current,
+          ...(typeof p.viewMode === 'string' && VALID_VIEW_MODES.includes(p.viewMode as ViewMode)
+            ? { viewMode: p.viewMode as ViewMode } : {}),
+          ...(typeof p.rawMode === 'boolean' ? { rawMode: p.rawMode } : {}),
+          ...(typeof p.fade === 'number' && p.fade >= FADE_MIN && p.fade <= FADE_MAX
+            ? { fade: p.fade } : {}),
+          ...(typeof p.thresh === 'number' && p.thresh >= THRESH_MIN && p.thresh <= THRESH_MAX
+            ? { thresh: p.thresh } : {}),
+          ...(typeof p.overlay === 'number' && p.overlay >= OVERLAY_MIN && p.overlay <= OVERLAY_MAX
+            ? { overlay: p.overlay } : {}),
+          ...(typeof p.bgColor === 'string' && BG_COLOR_RE.test(p.bgColor)
+            ? { bgColor: p.bgColor } : {}),
+        }
+      },
+      migrate: (persisted, version) => {
+        void version // v1 is current; add migration logic here when bumping version
+        return persisted as Record<string, unknown>
+      },
+    },
+  ),
+)

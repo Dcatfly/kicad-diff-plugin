@@ -1,5 +1,8 @@
 import { useDiffStore } from '../stores/useDiffStore'
 import { useTranslation } from '../lib/i18n'
+import {
+  FADE_MIN, FADE_MAX, THRESH_MIN, THRESH_MAX, OVERLAY_MIN, OVERLAY_MAX,
+} from '../lib/constants'
 import Slider from './Slider'
 import type { ViewMode } from '../types'
 
@@ -51,7 +54,7 @@ export default function Toolbar() {
       {/* Area 2: Mode-specific controls (fixed min-width) */}
       <div className="flex items-center gap-3">
         {isDiff && (
-          <Slider label={t('bgFade')} value={fade} min={0} max={100} suffix="%" onChange={setFade} />
+          <Slider label={t('bgFade')} value={fade} min={FADE_MIN} max={FADE_MAX} suffix="%" onChange={setFade} />
         )}
         {isSide && (
           <>
@@ -64,11 +67,11 @@ export default function Toolbar() {
               />
               {t('rawOnly')}
             </label>
-            <Slider label={t('bgFade')} value={fade} min={0} max={100} suffix="%" onChange={setFade} disabled={rawMode} />
+            <Slider label={t('bgFade')} value={fade} min={FADE_MIN} max={FADE_MAX} suffix="%" onChange={setFade} disabled={rawMode} />
           </>
         )}
         {isOverlay && (
-          <Slider label={t('opacity')} value={overlay} min={0} max={100} suffix="%" onChange={setOverlay} />
+          <Slider label={t('opacity')} value={overlay} min={OVERLAY_MIN} max={OVERLAY_MAX} suffix="%" onChange={setOverlay} />
         )}
       </div>
 
@@ -87,7 +90,7 @@ export default function Toolbar() {
           />
         </label>
         {showThresh && (
-          <Slider label={t('noiseFilter')} value={thresh} min={1} max={80} onChange={setThresh} />
+          <Slider label={t('noiseFilter')} value={thresh} min={THRESH_MIN} max={THRESH_MAX} onChange={setThresh} />
         )}
       </div>
     </div>

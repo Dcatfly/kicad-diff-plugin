@@ -7,6 +7,17 @@ export const DEFAULT_THRESH = 25
 export const DEFAULT_OVERLAY = 50
 export const DEFAULT_BG_COLOR = '#ffffff'
 
+// Slider ranges
+export const FADE_MIN = 0
+export const FADE_MAX = 100
+export const THRESH_MIN = 1
+export const THRESH_MAX = 80
+export const OVERLAY_MIN = 0
+export const OVERLAY_MAX = 100
+
+// Validation
+export const BG_COLOR_RE = /^#[0-9a-fA-F]{6}$/
+
 // Zoom range & steps
 export const ZOOM_MIN = 10
 export const ZOOM_MAX = 1000
