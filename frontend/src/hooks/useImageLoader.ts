@@ -104,13 +104,17 @@ export async function loadLayerImageArrays(
     })),
   )
 
-  const oldImgs = loaded.map((l) => l.old).filter(Boolean) as CanvasImageSource[]
-  const newImgs = loaded.map((l) => l.new).filter(Boolean) as CanvasImageSource[]
+  // Build aligned arrays — use placeholder for missing sides so that
+  // old[i] and new[i] always refer to the same logical layer.
+  const oldImgs: CanvasImageSource[] = []
+  const newImgs: CanvasImageSource[] = []
+  for (const l of loaded) {
+    oldImgs.push(l.old || createPlaceholder(l.new))
+    newImgs.push(l.new || createPlaceholder(l.old))
+  }
 
-  // If no images on a side, use a placeholder matching the other side
-  const anyImg = oldImgs[0] || newImgs[0] || null
-  const imgOld: ImageSource = oldImgs.length > 0 ? oldImgs : createPlaceholder(anyImg)
-  const imgNew: ImageSource = newImgs.length > 0 ? newImgs : createPlaceholder(anyImg)
+  const imgOld: ImageSource = oldImgs
+  const imgNew: ImageSource = newImgs
 
   return { imgOld, imgNew }
 }

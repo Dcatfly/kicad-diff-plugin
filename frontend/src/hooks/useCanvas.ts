@@ -8,7 +8,7 @@
 import { useCallback, useEffect, useLayoutEffect, useRef } from 'react'
 import { useDiffStore } from '../stores/useDiffStore'
 import type { ImageSource } from '../lib/renderer'
-import { applyZoom } from '../lib/renderer'
+import { applyZoom, computeDiffBounds, computeAutoFit } from '../lib/renderer'
 import { usePanZoom, clampPan, type PanState } from './usePanZoom'
 import { useHiResOverlay } from './useHiResOverlay'
 import { useRenderPipeline } from './useRenderPipeline'
@@ -74,7 +74,24 @@ export function useCanvas(
       const currentToken = useDiffStore.getState()._panResetToken
       if (currentToken !== lastResetTokenRef.current) {
         lastResetTokenRef.current = currentToken
-        panRef.current = { x: 0, y: 0 }
+        const dims = contentDimsRef.current
+        const state = useDiffStore.getState()
+        const clampEl = (state.viewMode === 'side' && leftPanelRef?.current)
+          ? leftPanelRef.current : containerRef.current
+
+        if (dims && clampEl && clampEl.clientWidth > 0) {
+          const { imgOld, imgNew } = images
+          const bounds = computeDiffBounds(imgOld, imgNew, state.thresh)
+          const { zoom: fitZoom, pan: fitPan } = computeAutoFit(
+            bounds, dims.natW, dims.natH, clampEl.clientWidth, clampEl.clientHeight
+          )
+          const clamped = clampPan(fitPan, dims, fitZoom, clampEl)
+          panRef.current = clamped
+          pendingPanRef.current = clamped
+          state.setZoom(fitZoom)
+        } else {
+          panRef.current = { x: 0, y: 0 }
+        }
       }
       applyPan()
     } else {
@@ -95,7 +112,7 @@ export function useCanvas(
         }
       }
     }
-  }, [images, canvasRef, canvasLRef, canvasRRef, renderFrame, invalidateCaches, hideHiRes, applyPan])
+  }, [images, canvasRef, canvasLRef, canvasRRef, renderFrame, invalidateCaches, hideHiRes, applyPan, containerRef, leftPanelRef])
 
   // ─── Effect C: Zoom (CSS-only, instant) ───
 

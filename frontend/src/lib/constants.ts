@@ -70,3 +70,6 @@ export const LAYER_ALPHA = 0.4
 export const DOM_COLOR_SAMPLE_SIZE = 64
 export const DOM_COLOR_AREA_THRESH = 0.20
 export const DOM_COLOR_MATCH_THRESH = 0.10
+
+// Auto-fit: padding ratio on each side of the diff bounding box
+export const AUTO_FIT_PADDING_RATIO = 0.10
