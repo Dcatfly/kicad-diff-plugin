@@ -9,8 +9,8 @@
   },
   "packages": {
     "url": "https://raw.githubusercontent.com/Dcatfly/kicad-diff-plugin/pcm-repo/packages.json",
-    "update_timestamp": 1773139643,
-    "sha256": "5df4efcb7a0b7d734b1625e167901dbe6e379204e4ad61dd15e98e5c077e7e57",
-    "update_time_utc": "2026-03-10 10:47:23"
+    "update_timestamp": 1773736082,
+    "sha256": "4b7c3abd170049e41a055d2ce013361ab8abaa571c549f00f3e3bf585edcae72",
+    "update_time_utc": "2026-03-17 08:28:02"
   }
 }
